@@ -16,13 +16,14 @@ namespace ScreenLine
         public bool CollectClipboard { get; set; }
         public bool CollectTextClipboard { get; set; }
         public bool AutoHang { get; set; }
+        public bool ShowBasket { get; set; }
         public string Theme { get; set; }
         public string LastUpdateNotification { get; set; }
         public List<string> Images { get; set; }
         public List<string> Collection { get; set; }
         public List<TextItem> Texts { get; set; }
 
-        public SavedState() { Images = new List<string>(); Collection = new List<string>(); Texts = new List<TextItem>(); Theme = "classic"; AutoHang = true; }
+        public SavedState() { Images = new List<string>(); Collection = new List<string>(); Texts = new List<TextItem>(); Theme = "classic"; AutoHang = true; ShowBasket = true; }
     }
 
     internal sealed class StateStore
@@ -329,6 +330,15 @@ namespace ScreenLine
         public void Remove(CaptureItem item)
         {
             Items.Remove(item);
+            Save();
+            Notify();
+        }
+
+        public void RemoveRange(IEnumerable<CaptureItem> items)
+        {
+            bool removed = false;
+            foreach (var item in items.ToList()) removed |= Items.Remove(item);
+            if (!removed) return;
             Save();
             Notify();
         }

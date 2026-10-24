@@ -78,7 +78,9 @@ namespace ScreenLine
             { "picture", "M5,3 H19 Q21,3 21,5 V19 Q21,21 19,21 H5 Q3,21 3,19 V5 Q3,3 5,3 Z M3,16 L8,11 L13,16 L17,12 L21,16 M16,7 H18" },
             { "text", "M6,3 H18 Q20,3 20,5 V19 Q20,21 18,21 H6 Q4,21 4,19 V5 Q4,3 6,3 Z M8,9 H16 M8,14 H13" },
             { "more", "M21,12 A9,9 0 1 0 3,12 A9,9 0 1 0 21,12 M7,12 H7.1 M12,12 H12.1 M17,12 H17.1" },
-            { "chevron", "M9,4 L16,12 L9,20" }
+            { "chevron", "M9,4 L16,12 L9,20" },
+            { "left", "M15,5 L8,12 L15,19 M8,12 H20" },
+            { "right", "M9,5 L16,12 L9,19 M4,12 H16" }
         };
 
         readonly TextBlock details;

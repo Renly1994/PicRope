@@ -59,7 +59,7 @@ namespace ScreenLine
 </ResourceDictionary>");
 
         internal readonly Button VisibilityButton, BasketButton, TextButton, AppearanceButton, ExitButton, MoreButton;
-        internal readonly CheckBox Pictures, Text, AutoHang;
+        internal readonly CheckBox Pictures, Text, AutoHang, ShowBasket;
         internal readonly LightMenu MoreMenu = new LightMenu("更多操作", "");
         internal readonly TextBlock Shortcut = new TextBlock { FontSize = 10, Foreground = LightTheme.Brush("#65717F"), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
 
@@ -85,6 +85,9 @@ namespace ScreenLine
             ((Grid)VisibilityButton.Content).Children.Add(Shortcut); panel.Children.Add(VisibilityButton);
             BasketButton = Action("图片篮子", "folder"); TextButton = Action("文字信封", "envelope");
             var entries = Pair(BasketButton, TextButton); entries.Margin = new Thickness(0, 5, 0, 2); panel.Children.Add(entries);
+            ShowBasket = Toggle("显示图片篮子", "folder", "显示绳子上的图片篮子");
+            ShowBasket.ToolTip = "关闭后只隐藏绳子上的篮子，仍可从托盘打开图片篮子";
+            panel.Children.Add(ShowBasket);
             panel.Children.Add(Divider());
             panel.Children.Add(new TextBlock { Text = "剪贴板收集", FontSize = 11, Foreground = LightTheme.Brush("#65717F"), Margin = new Thickness(12, 5, 0, 3) });
             Pictures = Toggle("图片", "picture", "收集剪贴板图片"); Text = Toggle("文字", "text", "收集剪贴板文字");

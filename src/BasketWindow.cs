@@ -75,7 +75,7 @@ namespace ScreenLine
         readonly TextBlock previewHint = new TextBlock { Text = "选择图片，查看大图", FontSize = 14, Foreground = LightTheme.Brush("#65717F"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         readonly TextBlock metadata = new TextBlock { FontSize = 12, Foreground = LightTheme.Brush("#65717F"), Margin = new Thickness(16, 0, 16, 14) };
         readonly Dictionary<string, Button> choices = new Dictionary<string, Button>(StringComparer.OrdinalIgnoreCase);
-        internal readonly Button PendingTab, AllTab, HangButton, DeleteButton;
+        internal readonly Button PendingTab, AllTab, HangButton, DeleteButton, SelectAllButton;
         internal readonly CheckBox AutoHang;
         bool pendingOnly = true, refreshing, mounting;
         CaptureItem previewItem;
@@ -136,7 +136,14 @@ namespace ScreenLine
             PendingTab = LightTheme.Button("待挂", delegate { pendingOnly = true; Refresh(); });
             AllTab = LightTheme.Button("全部", delegate { pendingOnly = false; Refresh(); });
             PendingTab.Margin = new Thickness(0, 0, 10, 0); tabs.Children.Add(PendingTab); tabs.Children.Add(AllTab);
-            var tabBar = new Border { BorderBrush = LightTheme.Brush("#E8EBEF"), BorderThickness = new Thickness(0, 0, 0, 1), Child = tabs };
+            SelectAllButton = LightTheme.Button("全选", ToggleSelectAll, "quiet");
+            SelectAllButton.Width = 84; SelectAllButton.Height = 30; SelectAllButton.Padding = new Thickness(8, 0, 8, 0);
+            SelectAllButton.HorizontalAlignment = HorizontalAlignment.Right; SelectAllButton.VerticalAlignment = VerticalAlignment.Center;
+            SelectAllButton.Margin = new Thickness(0, 0, 22, 0); SelectAllButton.ToolTip = "全选当前页图片";
+            AutomationProperties.SetName(SelectAllButton, "全选");
+            var tabRow = new Grid();
+            tabRow.Children.Add(tabs); tabRow.Children.Add(SelectAllButton);
+            var tabBar = new Border { BorderBrush = LightTheme.Brush("#E8EBEF"), BorderThickness = new Thickness(0, 0, 0, 1), Child = tabRow };
             Grid.SetRow(tabBar, 1); body.Children.Add(tabBar);
 
             var content = new Grid();
@@ -204,7 +211,7 @@ namespace ScreenLine
             PendingTab.Tag = pendingOnly ? "primary" : "quiet"; AllTab.Tag = pendingOnly ? "quiet" : "primary";
             double offset = scroll.VerticalOffset;
             thumbnails.Children.Clear(); choices.Clear();
-            var items = gallery.Collected.Where(i => !pendingOnly || !gallery.Contains(i.Path)).OrderByDescending(i => i.Written).ToArray();
+            var items = VisibleItems().OrderByDescending(i => i.Written).ToArray();
             foreach (var item in items) AddChoice(item);
             empty.Text = gallery.Collected.Count == 0 ? "图片篮子还是空的\n截图收集后会出现在这里" : "图片都挂好了\n切换到「全部」查看收集的图片";
             empty.Visibility = items.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -288,6 +295,29 @@ namespace ScreenLine
             status.Text = "已选 " + selected.Count + " 张" + (pending < selected.Count ? " · " + pending + " 张待挂" : "");
             HangButton.IsEnabled = pending > 0;
             DeleteButton.IsEnabled = selected.Count > 0;
+            var visible = VisibleItems();
+            bool all = visible.Length > 0 && visible.All(item => selected.Contains(item.Path));
+            SelectAllButton.Content = all ? "取消全选" : "全选";
+            SelectAllButton.IsEnabled = visible.Length > 0;
+            AutomationProperties.SetName(SelectAllButton, all ? "取消全选" : "全选");
+        }
+
+        CaptureItem[] VisibleItems()
+        {
+            return gallery.Collected.Where(i => !pendingOnly || !gallery.Contains(i.Path)).ToArray();
+        }
+
+        void ToggleSelectAll()
+        {
+            var visible = VisibleItems();
+            if (visible.Length == 0) return;
+            bool all = visible.All(item => selected.Contains(item.Path));
+            foreach (var item in visible)
+            {
+                if (all) selected.Remove(item.Path);
+                else selected.Add(item.Path);
+            }
+            Refresh();
         }
 
         void Mount()

@@ -118,6 +118,19 @@ namespace ScreenLine.Tests
                 gallery.Remove(gallery.Items[0]);
                 Check(File.Exists(file) && gallery.Items.Count == 0);
             });
+            Run("批量取下保留文件并一次性保存状态", delegate
+            {
+                var store = new StateStore(Path.Combine(root, "bulk-remove-profile"));
+                var gallery = new Gallery(store);
+                string first = WritePicture("批量一.png", 71);
+                string second = WritePicture("批量二.png", 72);
+                string third = WritePicture("批量三.png", 73);
+                foreach (var file in new[] { first, second, third }) gallery.Add(file, ImageContent.Read(file));
+                gallery.RemoveRange(gallery.Items.Take(2).ToArray());
+                Check(gallery.Items.Single().Path == third && File.Exists(first) && File.Exists(second));
+                var restored = new StateStore(store.Root);
+                Check(restored.State.Images.Single() == third && restored.State.Collection.Count == 3);
+            });
             Run("相同文件不会重复挂上", delegate
             {
                 var gallery = new Gallery(new StateStore(Path.Combine(root, "duplicate-profile")));
@@ -181,6 +194,16 @@ namespace ScreenLine.Tests
                 Check(!new StateStore(store.Root).State.AutoHang);
                 File.WriteAllText(Path.Combine(store.Root, "state.json"), "{\"Images\":[\"旧截图.png\"]}");
                 Check(new StateStore(store.Root).State.AutoHang);
+            });
+            Run("显示图片篮子默认开启并可保存隐藏状态", delegate
+            {
+                var store = new StateStore(Path.Combine(root, "show-basket-profile"));
+                Check(store.State.ShowBasket);
+                store.State.ShowBasket = false;
+                store.Save();
+                Check(!new StateStore(store.Root).State.ShowBasket);
+                File.WriteAllText(Path.Combine(store.Root, "state.json"), "{\"Images\":[\"旧截图.png\"]}");
+                Check(new StateStore(store.Root).State.ShowBasket);
             });
             Run("设置与中文路径可持久化并原子替换", delegate
             {

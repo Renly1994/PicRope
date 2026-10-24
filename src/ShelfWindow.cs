@@ -18,7 +18,14 @@ using Forms = System.Windows.Forms;
 
 namespace ScreenLine
 {
-    internal enum ShotAction { Copy, Open, Edit, Remove, Trash, Save, Locate }
+    internal enum ShotAction { Copy, Open, Edit, Remove, Trash, Save, Locate, RemoveLeft, RemoveRight, RemoveOthers, RemoveAll }
+
+    internal struct BulkCounts
+    {
+        public int Left;
+        public int Right;
+        public int Others;
+    }
 
     internal sealed class ShelfWindow : Window
     {
@@ -156,6 +163,7 @@ namespace ScreenLine
             BasketButton.MouseLeave += delegate { basketMotion.Target = 0; };
             System.Windows.Automation.AutomationProperties.SetName(BasketButton, "打开图片篮子");
             basket.Children.Add(BasketButton); Canvas.SetLeft(BasketButton, 6); Canvas.SetTop(BasketButton, 20);
+            BasketButton.Visibility = gallery.Store.State.ShowBasket ? Visibility.Visible : Visibility.Hidden;
             root.Children.Add(basket);
 
             var textHolder = new Canvas { Width = 112, Height = 220, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 166, 0), RenderTransform = slide };
@@ -269,7 +277,7 @@ namespace ScreenLine
                 ShotCard card;
                 if (!cards.TryGetValue(item.Path, out card))
                 {
-                    card = new ShotCard(item, act);
+                    card = new ShotCard(item, act, BulkCountsFor);
                     card.ApplyTheme(Appearance, gallery.Items.IndexOf(item));
                     var mounted = card;
                     card.Grip.Click += async delegate { await ReleasePhoto(mounted); };
@@ -358,6 +366,12 @@ namespace ScreenLine
             AutomationProperties.SetItemStatus(TextButton, textCount.Text + " 条文字");
         }
 
+        internal void ShowBasketIcon(bool visible)
+        {
+            BasketButton.Visibility = visible ? Visibility.Visible : Visibility.Hidden;
+            if (!visible) basketMotion.Target = 0;
+        }
+
         void UpdateEdgeMask()
         {
             double fade = Math.Min(0.08, 18 / PhotoWidth);
@@ -433,17 +447,54 @@ namespace ScreenLine
             PlayFlight(new ShotFlight(Display, card, card.PhotoRect(), true, delegate { }));
         }
 
-        public void ShowCollect(CaptureItem item)
+        public void ShowCollect(CaptureItem item, bool announce = true)
         {
             ShotCard card;
             if (!Revealed || !cards.TryGetValue(item.Path, out card) || card.Flying) return;
             peekUntil = DateTime.UtcNow.AddSeconds(2);
-            PlayFlight(new ShotFlight(Display, card, card.PhotoRect(), false, BasketReceived, null, delegate
+            Action landed = announce ? (Action)BasketReceived : delegate { };
+            PlayFlight(new ShotFlight(Display, card, card.PhotoRect(), false, landed, null, delegate
             {
                 Point mouth = basketImage.PointToScreen(PictureBasket.Mouth(Appearance));
                 double scale = WindowsNative.MonitorScale(Display);
                 return new Rect(mouth.X - 28 * scale, mouth.Y, 56 * scale, 16 * scale);
             }));
+        }
+
+        internal List<CaptureItem> HangingItems
+        {
+            get
+            {
+                var hanging = new List<CaptureItem>();
+                foreach (var item in gallery.Items)
+                {
+                    ShotCard card;
+                    if (!cards.TryGetValue(item.Path, out card) || !card.Detached) hanging.Add(item);
+                }
+                return hanging;
+            }
+        }
+
+        BulkCounts BulkCountsFor(CaptureItem item)
+        {
+            var hanging = HangingItems;
+            int index = hanging.FindIndex(entry => FileRules.SameFile(entry.Path, item.Path));
+            if (index < 0) return new BulkCounts();
+            return new BulkCounts { Left = index, Right = hanging.Count - index - 1, Others = hanging.Count - 1 };
+        }
+
+        public void ShowBulkCollect(IEnumerable<CaptureItem> items)
+        {
+            if (!Revealed) return;
+            bool started = false;
+            foreach (var item in items.Take(3))
+            {
+                ShotCard card;
+                if (!cards.TryGetValue(item.Path, out card) || card.Detached || card.Flying) continue;
+                ShowCollect(item, false);
+                started = true;
+            }
+            if (started) BasketReceived();
         }
 
         void BasketReceived()
@@ -599,7 +650,8 @@ namespace ScreenLine
             var photoArea = viewport.TransformToAncestor(this).TransformBounds(new Rect(viewport.RenderSize));
             IEnumerable<FrameworkElement> targets = cards.Values.Where(c => !c.Flying && !c.Detached).SelectMany(c => new FrameworkElement[] { c.Surface, c.Grip });
             if (hint.IsVisible) targets = targets.Concat(new[] { hint });
-            targets = targets.Concat(new[] { BasketButton, TextButton });
+            targets = targets.Concat(new[] { TextButton });
+            if (BasketButton.Visibility == Visibility.Visible) targets = targets.Concat(new[] { BasketButton });
             foreach (var target in targets)
             {
                 var bounds = target.TransformToAncestor(this).TransformBounds(new Rect(0, 0, target.ActualWidth, target.ActualHeight));
@@ -689,6 +741,7 @@ namespace ScreenLine
         readonly DispatcherTimer hold = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(480) };
         readonly DispatcherTimer flash = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.2) };
         readonly Action<ShotAction, CaptureItem> act;
+        readonly Func<CaptureItem, BulkCounts> bulkCounts;
         readonly ImageMenu menu;
         internal ImageMenu ActionMenu { get { return menu; } }
         Point start;
@@ -705,11 +758,12 @@ namespace ScreenLine
         public int ColorIndex { get; private set; }
         internal double MountX { get { return xMotion.Target; } }
 
-        public ShotCard(CaptureItem item, Action<ShotAction, CaptureItem> act)
+        public ShotCard(CaptureItem item, Action<ShotAction, CaptureItem> act, Func<CaptureItem, BulkCounts> bulkCounts)
         {
             Item = item;
             Appearance = LineTheme.All[0];
             this.act = act;
+            this.bulkCounts = bulkCounts;
             Width = 164;
             Height = 178;
             RenderTransform = tilt;
@@ -783,7 +837,7 @@ namespace ScreenLine
             Surface.MouseMove += Move;
             Surface.LostMouseCapture += delegate { hold.Stop(); pressed = false; };
             hold.Tick += delegate { hold.Stop(); held = true; pressed = false; Surface.ReleaseMouseCapture(); act(ShotAction.Edit, item); };
-            menu = new ImageMenu(delegate(ShotAction action) { act(action, Item); });
+            menu = new ImageMenu(delegate(ShotAction action) { act(action, Item); }, delegate { return bulkCounts(Item); });
             Surface.MouseRightButtonUp += delegate(object sender, MouseButtonEventArgs e)
             {
                 e.Handled = true;
