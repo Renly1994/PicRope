@@ -186,6 +186,30 @@ namespace ScreenLine.Tests
             await Task.Delay(150);
             await Until(() => WindowFromPoint(WindowsNative.Cursor()) == controller.Shelf.Handle);
             Check(WindowFromPoint(WindowsNative.Cursor()) == controller.Shelf.Handle, "鼠标在卡片上时窗口可接收点击");
+            await Until(() => controller.Shelf.PreviewVisible);
+            var targetBounds = new Rect(target.PointToScreen(new Point()), target.PointToScreen(new Point(target.ActualWidth, target.ActualHeight)));
+            var largePreview = controller.Shelf.LargePreview;
+            var largeBounds = largePreview.PictureBounds;
+            Check(largeBounds.Width > targetBounds.Width + 100 && largeBounds.Top >= targetBounds.Bottom,
+                "悬停图片时在卡片下方显示明显更大的预览");
+            Check(largePreview.ImageSource != null && largePreview.ImageSource.PixelWidth > 240, "大图预览从原图解码，而不是 240px 缩略图");
+            var screenArea = controller.Shelf.Display.WorkingArea;
+            var captureArea = Rect.Intersect(Rect.Union(targetBounds, largeBounds), new Rect(screenArea.Left, screenArea.Top, screenArea.Width, screenArea.Height));
+            CaptureScreen(captureArea, Path.Combine(Path.GetDirectoryName(PinPreviewPath("")), "大图预览.png"));
+            SetCursorPos((int)Math.Round(largeBounds.Left + largeBounds.Width / 2), (int)Math.Round(largeBounds.Top + largeBounds.Height / 2));
+            await Until(() => !controller.Shelf.PreviewVisible);
+            Check(!controller.Shelf.PreviewVisible, "鼠标移开图片后大图预览立即隐藏");
+            var secondCard = controller.Shelf.CardFor(controller.Gallery.Items[1].Path).Surface;
+            Point secondCenter = secondCard.PointToScreen(new Point(secondCard.ActualWidth / 2, secondCard.ActualHeight / 2));
+            SetCursorPos((int)secondCenter.X, (int)secondCenter.Y);
+            await Task.Delay(120);
+            SetCursorPos((int)secondCenter.X + 1, (int)secondCenter.Y);
+            await Until(() => controller.Shelf.PreviewVisible);
+            var secondPreview = controller.Shelf.LargePreview;
+            Check(secondPreview != null && secondPreview != largePreview && secondPreview.ImageSource != null,
+                "从一张图切到另一张时重新创建预览窗，不闪现上一张画面");
+            SetCursorPos((int)center.X, (int)center.Y);
+            await Until(() => WindowFromPoint(WindowsNative.Cursor()) == controller.Shelf.Handle);
             IntPtr focus = WindowsNative.GetForegroundWindow();
             mouse_event(2, 0, 0, 0, UIntPtr.Zero);
             await Until(() => controller.Shelf.CardFor(folderImage).Busy);

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -62,6 +63,10 @@ namespace ScreenLine
         readonly List<ShotFlight> flights = new List<ShotFlight>();
         readonly Dictionary<string, PinnedImageWindow> pins = new Dictionary<string, PinnedImageWindow>(StringComparer.OrdinalIgnoreCase);
         bool closing;
+        ImagePreviewWindow preview;
+        readonly DispatcherTimer previewDelay = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(280) };
+        ShotCard previewCandidate, previewCard;
+        int previewToken;
         readonly DispatcherTimer pointer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(30) };
         DateTime edgeSince = DateTime.MaxValue, awaySince = DateTime.MaxValue, peekUntil;
         DateTime nextGust;
@@ -215,11 +220,13 @@ namespace ScreenLine
             };
             SizeChanged += delegate { LayoutCards(); };
             pointer.Tick += Tick;
+            previewDelay.Tick += delegate { previewDelay.Stop(); ShowHoverPreview(); };
             gallery.Changed += Update;
             Microsoft.Win32.SystemEvents.DisplaySettingsChanged += DisplaysChanged;
             Closed += delegate
             {
                 closing = true;
+                HidePreview();
                 foreach (var pin in pins.Values.ToArray()) pin.Close();
                 pointer.Stop();
                 StopRendering();
@@ -253,6 +260,7 @@ namespace ScreenLine
 
         void MoveToDisplay()
         {
+            HidePreview();
             var screen = SelectedDisplay();
             Display = screen;
             double scale = WindowsNative.MonitorScale(screen);
@@ -277,6 +285,7 @@ namespace ScreenLine
             var retained = new HashSet<string>(gallery.Items.Select(i => i.Path), StringComparer.OrdinalIgnoreCase);
             foreach (string gone in cards.Keys.Where(k => !retained.Contains(k)).ToArray())
             {
+                if (previewCandidate == cards[gone] || previewCard == cards[gone]) HidePreview();
                 cards[gone].Dispose();
                 PinnedImageWindow pin;
                 if (pins.TryGetValue(gone, out pin)) pin.Close();
@@ -292,10 +301,15 @@ namespace ScreenLine
                     card.ApplyTheme(Appearance, gallery.Items.IndexOf(item));
                     var mounted = card;
                     card.Grip.Click += async delegate { await ReleasePhoto(mounted); };
+                    card.Surface.MouseEnter += delegate { HoverPreview(mounted); };
+                    card.Surface.MouseLeave += delegate { LeavePreview(mounted); };
+                    card.Surface.PreviewMouseLeftButtonDown += delegate { HidePreview(); };
+                    card.ActionMenu.Opened += delegate { HidePreview(); };
                     cards.Add(item.Path, card);
                     content.Children.Add(card);
                 }
                 bool changed = card.UpdateImage();
+                if (changed && previewCard == card) HidePreview();
                 PinnedImageWindow pinnedImage;
                 if (changed && pins.TryGetValue(item.Path, out pinnedImage)) pinnedImage.UpdateImage();
             }
@@ -545,6 +559,7 @@ namespace ScreenLine
             StartRendering();
             if (!shown)
             {
+                HidePreview();
                 if (RopeHidden != null) RopeHidden();
                 foreach (var flight in flights.ToArray()) flight.Close();
                 basketMotion.Snap(0); basketTurn.Angle = 0;
@@ -661,6 +676,12 @@ namespace ScreenLine
             bool busy = cards.Values.Any(c => c.Busy);
             WindowsNative.PassMouse(Handle, !Revealed || (!over && !busy));
             if (!Revealed) return;
+            if (previewCandidate != null && (!OverCard(previewCandidate, cursor) || previewCandidate.Busy))
+            {
+                previewCandidate = null;
+                previewDelay.Stop();
+            }
+            if (previewCard != null && (!OverCard(previewCard, cursor) || previewCard.Busy)) HidePreview();
             if (cards.Count > 0 && Math.Abs(scrollMotion.Velocity) < 8 && Math.Abs(scrollMotion.Target - viewport.HorizontalOffset) < 0.5 && !busy && now >= nextGust)
             {
                 nextGust = now.AddSeconds(7 + random.NextDouble() * 17);
@@ -681,7 +702,101 @@ namespace ScreenLine
         }
 
         public void ShowCopied(string path) { if (cards.ContainsKey(path)) cards[path].FlashCopied(); }
+
+        bool OverCard(ShotCard card, WindowsNative.Point cursor)
+        {
+            if (Display == null) return false;
+            var surface = card.Surface;
+            Point origin = surface.PointToScreen(new Point(0, 0));
+            double dpi = WindowsNative.MonitorScale(Display);
+            return cursor.X >= origin.X && cursor.X < origin.X + surface.ActualWidth * dpi
+                && cursor.Y >= origin.Y && cursor.Y < origin.Y + surface.ActualHeight * dpi;
+        }
+
+        void HoverPreview(ShotCard card)
+        {
+            if (!Revealed || card == null || closing) return;
+            previewCandidate = card;
+            previewDelay.Stop();
+            previewDelay.Start();
+        }
+
+        void LeavePreview(ShotCard card)
+        {
+            if (previewCandidate == card) { previewCandidate = null; previewDelay.Stop(); }
+            if (previewCard == card) HidePreview();
+        }
+
+        internal void HidePreview()
+        {
+            previewToken++;
+            previewCandidate = null;
+            previewCard = null;
+            previewDelay.Stop();
+            var window = preview;
+            preview = null;
+            if (window != null) window.Close();
+        }
+
+        async void ShowHoverPreview()
+        {
+            var card = previewCandidate;
+            if (card == null || !Revealed || card.Busy || card.IsDisposed || closing) return;
+            var image = card.Item.Image;
+            if (image == null || image.PixelWidth <= 0 || image.PixelHeight <= 0) return;
+            double dpi = WindowsNative.MonitorScale(Display);
+            var area = Display.WorkingArea;
+            var surface = card.Surface;
+            Point origin = surface.PointToScreen(new Point(0, 0));
+            double cardWidth = surface.ActualWidth * dpi, cardHeight = surface.ActualHeight * dpi;
+            double maxWidth = Math.Min(640 * dpi, area.Width - 40 * dpi);
+            double maxHeight = Math.Min(640 * dpi, area.Bottom - (origin.Y + cardHeight) - 32 * dpi);
+            if (maxWidth < 100 * dpi || maxHeight < 100 * dpi) return;
+            double fit = Math.Min(maxWidth / image.PixelWidth, maxHeight / image.PixelHeight);
+            fit = Math.Min(fit, 3);
+            double imageWidth = Math.Max(1, Math.Round(image.PixelWidth * fit));
+            double imageHeight = Math.Max(1, Math.Round(image.PixelHeight * fit));
+            double windowWidth = imageWidth + 38 * dpi, windowHeight = imageHeight + 38 * dpi;
+            double left = Math.Max(area.Left + 12 * dpi, Math.Min(area.Right - windowWidth - 12 * dpi, origin.X + cardWidth / 2 - windowWidth / 2));
+            double top = Math.Max(area.Top + 8 * dpi, Math.Min(origin.Y + cardHeight + 10 * dpi, area.Bottom - windowHeight - 8 * dpi));
+            int decodeWidth = (int)Math.Min(Math.Round(imageWidth), image.PixelWidth);
+            int token = ++previewToken;
+            BitmapSource picture;
+            try { picture = await Task.Run(delegate { return DecodePreview(card.Item.Path, image, decodeWidth); }); }
+            catch (Exception error) { gallery.Store.Log(error); return; }
+            if (token != previewToken || previewCandidate != card || !Revealed || closing) return;
+            try
+            {
+                previewCard = card;
+                preview = new ImagePreviewWindow();
+                preview.Display(picture, imageWidth, imageHeight, new Rect(left, top, windowWidth, windowHeight), dpi);
+            }
+            catch (Exception error)
+            {
+                HidePreview();
+                gallery.Store.Log(error);
+            }
+        }
+
+        static BitmapSource DecodePreview(string path, ImageContent image, int width)
+        {
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                var bitmap = new BitmapImage();
+                bitmap.BeginInit();
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
+                bitmap.StreamSource = stream;
+                if (width > 0 && width < image.PixelWidth) bitmap.DecodePixelWidth = width;
+                bitmap.EndInit();
+                bitmap.Freeze();
+                return bitmap;
+            }
+        }
+
         internal ShotCard CardFor(string path) { return cards[path]; }
+        internal ImagePreviewWindow LargePreview { get { return preview; } }
+        internal bool PreviewVisible { get { return preview != null && preview.Shown; } }
         internal IEnumerable<ShotFlight> MotionWindows { get { return flights; } }
         internal IEnumerable<PinnedImageWindow> PinWindows { get { return pins.Values; } }
         internal bool Animating { get { return rendering; } }

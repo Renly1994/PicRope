@@ -235,6 +235,7 @@ namespace ScreenLine
             double shelfOpacity = Shelf.Opacity;
             try
             {
+                Shelf.HidePreview();
                 Shelf.Opacity = 0;
                 var overlay = new ScreenshotOverlayWindow(WindowsNative.ScreenAtPointer());
                 screenshotOverlay = overlay;
