@@ -9,12 +9,10 @@ namespace ScreenLine
 {
     internal sealed class ScreenshotSelection
     {
-        public readonly Forms.Screen Screen;
         public readonly Rectangle Bounds;
 
-        public ScreenshotSelection(Forms.Screen screen, Rectangle bounds)
+        public ScreenshotSelection(Rectangle bounds)
         {
-            Screen = screen;
             Bounds = bounds;
         }
     }

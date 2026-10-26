@@ -133,7 +133,10 @@ namespace ScreenLine
                 if (args.Key == Key.Right || args.Key == Key.Enter || args.Key == Key.Space)
                 {
                     OpenBulk();
-                    removeLeft.Focus();
+                    MenuItem target = removeLeft.IsEnabled ? removeLeft
+                        : removeRight.IsEnabled ? removeRight
+                        : removeOthers.IsEnabled ? removeOthers : removeAll;
+                    if (target.IsEnabled) target.Focus();
                     args.Handled = true;
                 }
                 else if (args.Key == Key.Left)
@@ -210,19 +213,19 @@ namespace ScreenLine
 
         void UpdateBulk()
         {
-            BulkCounts counts = bulkCounts != null ? bulkCounts() : new BulkCounts { Left = 1, Right = 1, Others = 1 };
-            int others = counts.Left + counts.Right + counts.Others;
-            BulkMenu.IsEnabled = others > 0;
+            BulkCounts counts = bulkCounts();
+            int otherCount = counts.Others;
+            BulkMenu.IsEnabled = otherCount > 0;
             if (!BulkMenu.IsEnabled) BulkMenu.IsSubmenuOpen = false;
-            AutomationProperties.SetHelpText(BulkMenu, BulkMenu.IsEnabled ? (others + 1) + " 张图片" : "至少需要两张图片才能批量取下");
+            AutomationProperties.SetHelpText(BulkMenu, BulkMenu.IsEnabled ? (otherCount + 1) + " 张图片" : "至少需要两张图片才能批量取下");
             removeLeft.IsEnabled = counts.Left > 0;
             removeRight.IsEnabled = counts.Right > 0;
-            removeOthers.IsEnabled = counts.Others > 0;
-            removeAll.IsEnabled = others > 0;
+            removeOthers.IsEnabled = otherCount > 0;
+            removeAll.IsEnabled = otherCount > 0;
             AutomationProperties.SetHelpText(removeLeft, counts.Left + " 张图片");
             AutomationProperties.SetHelpText(removeRight, counts.Right + " 张图片");
-            AutomationProperties.SetHelpText(removeOthers, counts.Others + " 张图片");
-            AutomationProperties.SetHelpText(removeAll, (others + 1) + " 张图片");
+            AutomationProperties.SetHelpText(removeOthers, otherCount + " 张图片");
+            AutomationProperties.SetHelpText(removeAll, (otherCount + 1) + " 张图片");
         }
 
         MenuItem BulkItem(string title, string icon, ShotAction action, Action<ShotAction> execute)

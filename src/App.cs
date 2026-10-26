@@ -261,8 +261,12 @@ namespace ScreenLine
             }
             finally
             {
-                Shelf.Opacity = shelfOpacity;
-                screenshotOverlay = null;
+                if (screenshotOverlay != null)
+                {
+                    if (screenshotOverlay.IsVisible) screenshotOverlay.Close();
+                    screenshotOverlay = null;
+                }
+                if (!disposed) Shelf.Opacity = shelfOpacity;
                 screenshotBusy = false;
             }
         }

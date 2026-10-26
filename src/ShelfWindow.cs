@@ -793,8 +793,8 @@ namespace ScreenLine
             var surface = card.Surface;
             Point origin = surface.PointToScreen(new Point(0, 0));
             double cardWidth = surface.ActualWidth * dpi, cardHeight = surface.ActualHeight * dpi;
-            double maxWidth = Math.Min(640 * dpi, area.Width - 40 * dpi);
-            double maxHeight = Math.Min(640 * dpi, area.Bottom - (origin.Y + cardHeight) - 32 * dpi);
+            double maxWidth = Math.Min(640 * dpi, area.Width - 62 * dpi);
+            double maxHeight = Math.Min(640 * dpi, area.Bottom - (origin.Y + cardHeight) - 56 * dpi);
             if (maxWidth < 100 * dpi || maxHeight < 100 * dpi) return;
             double fit = Math.Min(maxWidth / image.PixelWidth, maxHeight / image.PixelHeight);
             fit = Math.Min(fit, 3);

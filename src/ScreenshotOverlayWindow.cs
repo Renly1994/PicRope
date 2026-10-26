@@ -154,7 +154,7 @@ namespace ScreenLine
                 Cancel();
                 return;
             }
-            result = new ScreenshotSelection(screen, ScreenshotCapture.ToPhysicalBounds(screen.Bounds, scale, selection));
+            result = new ScreenshotSelection(ScreenshotCapture.ToPhysicalBounds(screen.Bounds, scale, selection));
             Finish();
         }
 

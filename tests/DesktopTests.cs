@@ -444,6 +444,19 @@ namespace ScreenLine.Tests
             basket.HangButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(controller.Gallery.Contains(second) && controller.Gallery.Contains(last.Path) && basket.SelectedCount == 0,
                 "批量挂图使用当前多选结果并清空选择");
+            int pendingVisible = basket.VisibleCount;
+            basket.SelectAllButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(basket.SelectedCount == pendingVisible && basket.HangButton.IsEnabled
+                && (string)basket.SelectAllButton.Content == "取消全选", "全选按钮选中当前页全部待挂图片");
+            basket.SelectAllButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(basket.SelectedCount == 0 && (string)basket.SelectAllButton.Content == "全选", "再次点击全选按钮取消当前页选择");
+            basket.AllTab.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            int allVisible = basket.VisibleCount;
+            basket.SelectAllButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(allVisible > pendingVisible && basket.SelectedCount == allVisible
+                && (string)basket.SelectAllButton.Content == "取消全选", "全部页全选包含已挂上的图片");
+            basket.SelectAllButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(basket.SelectedCount == 0, "全部页再次点击可取消全选");
         }
 
         static async Task CheckBasket(StateStore store, string watched)
@@ -1821,6 +1834,14 @@ namespace ScreenLine.Tests
             Check(leftmost.ActionMenu.BulkActions.Count == 4
                 && !leftmost.ActionMenu.BulkActions[ShotAction.RemoveLeft].IsEnabled
                 && leftmost.ActionMenu.BulkActions[ShotAction.RemoveRight].IsEnabled, "最左侧图片没有可取的左侧图片");
+            leftmost.ActionMenu.BulkMenu.Focus();
+            keybd_event(39, 0, 0, UIntPtr.Zero); keybd_event(39, 0, 2, UIntPtr.Zero);
+            await Until(() => leftmost.ActionMenu.BulkMenu.IsSubmenuOpen);
+            Check(leftmost.ActionMenu.BulkMenu.IsSubmenuOpen
+                && leftmost.ActionMenu.BulkActions[ShotAction.RemoveRight].IsKeyboardFocused,
+                "最左侧图片用键盘展开批量取下时聚焦第一个可用操作");
+            keybd_event(37, 0, 0, UIntPtr.Zero); keybd_event(37, 0, 2, UIntPtr.Zero);
+            await Until(() => !leftmost.ActionMenu.BulkMenu.IsSubmenuOpen);
             leftmost.ActionMenu.IsOpen = false;
             await Until(() => !leftmost.ActionMenu.IsOpen);
             var rightmost = controller.Shelf.CardFor(batchPaths[3]);
