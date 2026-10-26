@@ -3,7 +3,6 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Windows;
-using Forms = System.Windows.Forms;
 
 namespace ScreenLine
 {

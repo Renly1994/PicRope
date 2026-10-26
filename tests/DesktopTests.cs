@@ -1855,6 +1855,10 @@ namespace ScreenLine.Tests
             middle.ActionMenu.IsOpen = true;
             await Until(() => middle.ActionMenu.IsOpen);
             Check(middle.ActionMenu.BulkActions.Values.All(entry => entry.IsEnabled), "中间图片的四种批量取下均可用");
+            Check(AutomationProperties.GetHelpText(middle.ActionMenu.BulkMenu) == "5 张图片"
+                && AutomationProperties.GetHelpText(middle.ActionMenu.BulkActions[ShotAction.RemoveAll]) == "5 张图片"
+                && AutomationProperties.GetHelpText(middle.ActionMenu.BulkActions[ShotAction.RemoveOthers]) == "4 张图片",
+                "批量取下的数量文案与实际图片数量一致");
             double rowCenter = middle.ActionMenu.BulkMenu.ActualHeight / 2;
             var chevron = middle.ActionMenu.BulkMenu.Template.FindName("Chevron", middle.ActionMenu.BulkMenu) as FrameworkElement;
             var minus = middle.ActionMenu.BulkMenu.Template.FindName("Minus", middle.ActionMenu.BulkMenu) as FrameworkElement;
