@@ -131,8 +131,10 @@ namespace ScreenLine
     {
         readonly HwndSource source;
         public readonly bool ShortcutAvailable;
+        public readonly bool ScreenshotShortcutAvailable;
         public event Action ClipboardChanged;
         public event Action ToggleRequested;
+        public event Action ScreenshotRequested;
         public event Action ExitRequested;
 
         public WindowsEvents()
@@ -141,12 +143,19 @@ namespace ScreenLine
             source.AddHook(Receive);
             if (!WindowsNative.AddClipboardFormatListener(source.Handle)) throw new System.ComponentModel.Win32Exception();
             ShortcutAvailable = WindowsNative.RegisterHotKey(source.Handle, 1, 0x4003, (uint)'T');
+            ScreenshotShortcutAvailable = WindowsNative.RegisterHotKey(source.Handle, 2, 0x4003, (uint)'S');
         }
 
         IntPtr Receive(IntPtr window, int message, IntPtr w, IntPtr l, ref bool handled)
         {
             if (message == 0x031D && ClipboardChanged != null) ClipboardChanged();
-            if ((message == 0x0312 || message == WindowsNative.ShowMessage) && ToggleRequested != null) ToggleRequested();
+            if (message == 0x0312)
+            {
+                int id = w.ToInt32();
+                if (id == 1 && ToggleRequested != null) ToggleRequested();
+                else if (id == 2 && ScreenshotRequested != null) ScreenshotRequested();
+            }
+            if (message == WindowsNative.ShowMessage && ToggleRequested != null) ToggleRequested();
             if (message == WindowsNative.ExitMessage && ExitRequested != null) ExitRequested();
             return IntPtr.Zero;
         }
@@ -155,6 +164,7 @@ namespace ScreenLine
         {
             WindowsNative.RemoveClipboardFormatListener(source.Handle);
             if (ShortcutAvailable) WindowsNative.UnregisterHotKey(source.Handle, 1);
+            if (ScreenshotShortcutAvailable) WindowsNative.UnregisterHotKey(source.Handle, 2);
             source.Dispose();
         }
     }

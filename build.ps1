@@ -1,4 +1,4 @@
-﻿param([switch]$DesktopTests, [switch]$FolderTests, [switch]$MenuTests, [switch]$EditorTests, [switch]$ThemeTests, [switch]$WindTests, [switch]$BasketTests, [switch]$ScrollTests, [switch]$BasketAppearanceTests, [switch]$BasketMotionTests, [switch]$UpdateTests, [switch]$TextTests, [switch]$EnvelopeMotionTests, [switch]$MonitorTests, [switch]$Package)
+﻿param([switch]$DesktopTests, [switch]$FolderTests, [switch]$MenuTests, [switch]$EditorTests, [switch]$ThemeTests, [switch]$WindTests, [switch]$BasketTests, [switch]$ScrollTests, [switch]$BasketAppearanceTests, [switch]$BasketMotionTests, [switch]$UpdateTests, [switch]$TextTests, [switch]$EnvelopeMotionTests, [switch]$MonitorTests, [switch]$ScreenshotTests, [switch]$Package)
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $frameworkPath = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
@@ -98,6 +98,13 @@ if ($EnvelopeMotionTests) {
 }
 
 if ($MonitorTests) { & (Join-Path $projectRoot 'tests\MonitorTests.ps1') }
+
+if ($ScreenshotTests) {
+    & $compilerPath /nologo /target:exe /platform:x64 /codepage:65001 "/out:$buildPath\ScreenshotTests.exe" /main:ScreenLine.Tests.ScreenshotTests $references (Join-Path $projectRoot 'src\Core.cs') (Join-Path $projectRoot 'src\ScreenshotCapture.cs') (Join-Path $projectRoot 'tests\ScreenshotTests.cs')
+    if ($LASTEXITCODE -ne 0) { throw '截图测试构建失败' }
+    & (Join-Path $buildPath 'ScreenshotTests.exe')
+    if ($LASTEXITCODE -ne 0) { throw '截图测试未通过' }
+}
 
 if ($Package) {
     & (Join-Path $projectRoot 'package.ps1')

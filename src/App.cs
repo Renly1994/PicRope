@@ -48,7 +48,8 @@ namespace ScreenLine
         readonly bool automaticUpdates;
         UpdateRelease availableUpdate;
         UpdateWindow updateWindow;
-        bool checkingUpdates, disposed;
+        ScreenshotOverlayWindow screenshotOverlay;
+        bool checkingUpdates, screenshotBusy, disposed;
         uint textClipboardSequence;
         int textClipboardVersion;
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -65,6 +66,7 @@ namespace ScreenLine
             Texts.Changed += Shelf.UpdateTexts;
             events = new WindowsEvents();
             events.ToggleRequested += Shelf.Toggle;
+            events.ScreenshotRequested += CaptureScreenshot;
             events.ExitRequested += Exit;
             events.ClipboardChanged += Captures.ClipboardChanged;
             textClipboardSequence = WindowsNative.GetClipboardSequenceNumber();
@@ -81,6 +83,7 @@ namespace ScreenLine
             TrayMenu.OnAction(TrayMenu.VisibilityButton, delegate { Shelf.Toggle(); });
             if (events.ShortcutAvailable) TrayMenu.Shortcut.Text = "Ctrl+Alt+T";
             else Notice("Ctrl+Alt+T 已被占用，可点击托盘图标打开。");
+            if (!events.ScreenshotShortcutAvailable) Notice("Ctrl+Alt+S 已被占用，截图快捷键不可用。");
             TrayMenu.OnAction(TrayMenu.BasketButton, ShowBasket);
             TrayMenu.OnAction(TrayMenu.TextButton, ShowTexts);
             autoHang = TrayMenu.AutoHang;
@@ -225,6 +228,43 @@ namespace ScreenLine
             catch (Exception error) { if (!disposed) Gallery.Store.Log(error); }
         }
 
+        async void CaptureScreenshot()
+        {
+            if (disposed || screenshotBusy) return;
+            screenshotBusy = true;
+            double shelfOpacity = Shelf.Opacity;
+            try
+            {
+                Shelf.Opacity = 0;
+                var overlay = new ScreenshotOverlayWindow(WindowsNative.ScreenAtPointer());
+                screenshotOverlay = overlay;
+                ScreenshotSelection selection = await overlay.PickAsync();
+                screenshotOverlay = null;
+                if (disposed || selection == null) return;
+                await Task.Delay(80);
+                byte[] png = await Task.Run(() => ScreenshotCapture.Capture(selection.Bounds));
+                if (disposed) return;
+                string path = ScreenshotCapture.CreatePath(Gallery.Store);
+                await Task.Run(() => File.WriteAllBytes(path, png));
+                if (disposed) return;
+                ImageContent image = await Task.Run(() => ImageContent.Read(path));
+                if (disposed) return;
+                CaptureItem item = Gallery.Collect(path, image);
+                Act(ShotAction.Edit, item);
+            }
+            catch (Exception error)
+            {
+                Gallery.Store.Log(error);
+                Notice("截图未完成，请重试。");
+            }
+            finally
+            {
+                Shelf.Opacity = shelfOpacity;
+                screenshotOverlay = null;
+                screenshotBusy = false;
+            }
+        }
+
         internal void ShowBasket()
         {
             if (Basket != null) { Basket.Activate(); return; }
@@ -359,6 +399,7 @@ namespace ScreenLine
             if (Basket != null) Basket.Close();
             if (TextWindow != null) TextWindow.Close();
             if (Appearance != null) Appearance.Close();
+            if (screenshotOverlay != null) screenshotOverlay.Close();
             if (notice != null) notice.Close();
             foreach (var editor in Editors.ToArray()) editor.CloseWithoutPrompt();
             TrayMenu.Close();
