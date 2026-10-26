@@ -334,6 +334,15 @@ namespace ScreenLine
             Notify();
         }
 
+        public void RemoveRange(IEnumerable<CaptureItem> items)
+        {
+            bool removed = false;
+            foreach (var item in items.ToList()) removed |= Items.Remove(item);
+            if (!removed) return;
+            Save();
+            Notify();
+        }
+
         public void Clear()
         {
             Items.Clear();

@@ -1774,7 +1774,7 @@ namespace ScreenLine.Tests
             Check(card.ActionMenu.Actions.Count == 6 && !card.ActionMenu.Actions.ContainsKey(ShotAction.Copy), "图片右键保留六个操作，复制直接使用左键");
             Check(card.ActionMenu.Actions.Values.All(button => !button.IsKeyboardFocused), "右键展开时不默认选中任何操作");
             Check(card.ActionMenu.IsKeyboardFocused, "菜单容器接收键盘输入，操作项保持未选中");
-            Check(card.ActionMenu.ActualWidth <= 220 && card.ActionMenu.ActualHeight < 290, "图片菜单以窄版单列显示，整体尺寸紧凑");
+            Check(card.ActionMenu.ActualWidth <= 220 && card.ActionMenu.ActualHeight < 330, "图片菜单以窄版单列显示，包含批量取下仍保持紧凑");
             var openButton = card.ActionMenu.Actions[ShotAction.Open];
             var editButton = card.ActionMenu.Actions[ShotAction.Edit];
             var openBounds = openButton.TransformToAncestor(card.ActionMenu).TransformBounds(new Rect(openButton.RenderSize));
@@ -1798,6 +1798,109 @@ namespace ScreenLine.Tests
             await Until(() => Clipboard.ContainsFileDropList() && Clipboard.GetFileDropList().Contains(path));
             lastTestSequence = WindowsNative.GetClipboardSequenceNumber();
             Check(Clipboard.GetDataObject().GetDataPresent("PNG"), "图片左键仍同时复制图片和文件");
+
+            string[] batchPaths =
+            {
+                Path.Combine(store.Inbox, "批量左侧.png"),
+                Path.Combine(store.Inbox, "批量中间.png"),
+                Path.Combine(store.Inbox, "批量右侧.png"),
+                Path.Combine(store.Inbox, "批量末尾.png")
+            };
+            byte[][] batchBytes = new byte[batchPaths.Length][];
+            for (int index = 0; index < batchPaths.Length; index++)
+            {
+                batchBytes[index] = Asset("批量测试 " + (index + 1), "批量取下 · 保留文件", Color.FromRgb((byte)(80 + index * 40), 120, 160));
+                File.WriteAllBytes(batchPaths[index], batchBytes[index]);
+                controller.Gallery.Add(batchPaths[index], ImageContent.Decode(batchBytes[index]));
+            }
+            await Until(() => controller.Gallery.Items.Count == 5);
+            await Task.Delay(700);
+            var leftmost = controller.Shelf.CardFor(path);
+            leftmost.ActionMenu.IsOpen = true;
+            await Until(() => leftmost.ActionMenu.IsOpen);
+            Check(leftmost.ActionMenu.BulkActions.Count == 4
+                && !leftmost.ActionMenu.BulkActions[ShotAction.RemoveLeft].IsEnabled
+                && leftmost.ActionMenu.BulkActions[ShotAction.RemoveRight].IsEnabled, "最左侧图片没有可取的左侧图片");
+            leftmost.ActionMenu.IsOpen = false;
+            await Until(() => !leftmost.ActionMenu.IsOpen);
+            var rightmost = controller.Shelf.CardFor(batchPaths[3]);
+            rightmost.ActionMenu.IsOpen = true;
+            await Until(() => rightmost.ActionMenu.IsOpen);
+            Check(!rightmost.ActionMenu.BulkActions[ShotAction.RemoveRight].IsEnabled
+                && rightmost.ActionMenu.BulkActions[ShotAction.RemoveLeft].IsEnabled, "最右侧图片没有可取的右侧图片");
+            rightmost.ActionMenu.IsOpen = false;
+            await Until(() => !rightmost.ActionMenu.IsOpen);
+            var middle = controller.Shelf.CardFor(batchPaths[1]);
+            middle.ActionMenu.IsOpen = true;
+            await Until(() => middle.ActionMenu.IsOpen);
+            Check(middle.ActionMenu.BulkActions.Values.All(entry => entry.IsEnabled), "中间图片的四种批量取下均可用");
+            double rowCenter = middle.ActionMenu.BulkMenu.ActualHeight / 2;
+            var chevron = middle.ActionMenu.BulkMenu.Template.FindName("Chevron", middle.ActionMenu.BulkMenu) as FrameworkElement;
+            var minus = middle.ActionMenu.BulkMenu.Template.FindName("Minus", middle.ActionMenu.BulkMenu) as FrameworkElement;
+            var chevronBounds = chevron.TransformToAncestor(middle.ActionMenu.BulkMenu).TransformBounds(new Rect(chevron.RenderSize));
+            var minusBounds = minus.TransformToAncestor(middle.ActionMenu.BulkMenu).TransformBounds(new Rect(minus.RenderSize));
+            Check(Math.Abs((chevronBounds.Top + chevronBounds.Bottom) / 2 - rowCenter) <= 1
+                && Math.Abs((minusBounds.Top + minusBounds.Bottom) / 2 - rowCenter) <= 1, "批量取下左右图标与文字垂直居中");
+            Check(chevronBounds.Height >= 11, "批量取下右侧箭头尺寸清晰可辨");
+            Point bulkPoint = middle.ActionMenu.BulkMenu.PointToScreen(new Point(middle.ActionMenu.BulkMenu.ActualWidth / 2, middle.ActionMenu.BulkMenu.ActualHeight / 2));
+            SetCursorPos((int)bulkPoint.X, (int)bulkPoint.Y);
+            await Until(() => middle.ActionMenu.BulkMenu.IsSubmenuOpen);
+            Check(middle.ActionMenu.BulkMenu.IsSubmenuOpen, "悬停批量取下展开子菜单");
+            var bulkPopup = (System.Windows.Controls.Primitives.Popup)middle.ActionMenu.BulkMenu.Template.FindName("PART_Popup", middle.ActionMenu.BulkMenu);
+            var bulkSurface = bulkPopup.Child as FrameworkElement;
+            bulkSurface.UpdateLayout();
+            var bulkPreview = new RenderTargetBitmap((int)Math.Ceiling(bulkSurface.ActualWidth * 2), (int)Math.Ceiling(bulkSurface.ActualHeight * 2), 192, 192, PixelFormats.Pbgra32);
+            bulkPreview.Render(bulkSurface);
+            var bulkEncoder = new PngBitmapEncoder(); bulkEncoder.Frames.Add(BitmapFrame.Create(bulkPreview));
+            string bulkDirectory = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "previews", "右键菜单"));
+            Directory.CreateDirectory(bulkDirectory);
+            using (var output = File.Create(Path.Combine(bulkDirectory, "批量取下.png"))) bulkEncoder.Save(output);
+            SetCursorPos(600, 700);
+            await Task.Delay(420);
+            Check(!middle.ActionMenu.BulkMenu.IsSubmenuOpen, "移开鼠标后批量取下子菜单自动收起");
+            imagePreview = RenderMenu(middle.ActionMenu);
+            middle.ActionMenu.BulkActions[ShotAction.RemoveLeft].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await Until(() => controller.Gallery.Items.Count == 3 && controller.Gallery.Items.All(entry => entry.Path != path));
+            Check(File.Exists(path) && File.Exists(batchPaths[0]) && controller.Gallery.Collected.Any(entry => entry.Path == path), "批量取下左侧保留原图并留在图片篮子");
+            await Until(() => !controller.Shelf.MotionWindows.Any());
+            middle = controller.Shelf.CardFor(batchPaths[1]);
+            middle.ActionMenu.IsOpen = true;
+            await Until(() => middle.ActionMenu.IsOpen);
+            middle.ActionMenu.BulkActions[ShotAction.RemoveRight].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await Until(() => controller.Gallery.Items.Count == 1 && controller.Gallery.Items[0].Path == batchPaths[1]);
+            Check(File.Exists(batchPaths[2]) && File.Exists(batchPaths[3]), "批量取下右侧保留原图");
+            await Until(() => !controller.Shelf.MotionWindows.Any());
+            controller.Gallery.Add(batchPaths[0], ImageContent.Decode(batchBytes[0]));
+            controller.Gallery.Add(batchPaths[2], ImageContent.Decode(batchBytes[2]));
+            await Until(() => controller.Gallery.Items.Count == 3);
+            await Task.Delay(600);
+            middle = controller.Shelf.CardFor(batchPaths[1]);
+            middle.ActionMenu.IsOpen = true;
+            await Until(() => middle.ActionMenu.IsOpen);
+            middle.ActionMenu.BulkActions[ShotAction.RemoveOthers].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await Until(() => controller.Gallery.Items.Count == 1 && controller.Gallery.Items[0].Path == batchPaths[1]);
+            Check(File.Exists(batchPaths[0]) && File.Exists(batchPaths[2]), "仅保留这一张取下其余图片且保留文件");
+            await Until(() => !controller.Shelf.MotionWindows.Any());
+            controller.Gallery.Add(batchPaths[0], ImageContent.Decode(batchBytes[0]));
+            controller.Gallery.Add(batchPaths[2], ImageContent.Decode(batchBytes[2]));
+            await Until(() => controller.Gallery.Items.Count == 3);
+            await Task.Delay(600);
+            middle = controller.Shelf.CardFor(batchPaths[1]);
+            middle.ActionMenu.IsOpen = true;
+            await Until(() => middle.ActionMenu.IsOpen);
+            middle.ActionMenu.BulkActions[ShotAction.RemoveAll].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await Until(() => controller.Gallery.Items.Count == 0);
+            Check(File.Exists(batchPaths[1]) && controller.Gallery.Collected.Count >= 5, "取下全部保留所有原图并在篮子中可见");
+            await Until(() => !controller.Shelf.MotionWindows.Any());
+            controller.Gallery.Add(path, ImageContent.Decode(content));
+            await Until(() => controller.Gallery.Items.Count == 1);
+            await Task.Delay(600);
+            var single = controller.Shelf.CardFor(path);
+            single.ActionMenu.IsOpen = true;
+            await Until(() => single.ActionMenu.IsOpen);
+            Check(!single.ActionMenu.BulkMenu.IsEnabled, "绳上只有一张图片时批量取下整体置灰");
+            single.ActionMenu.IsOpen = false;
+            await Until(() => !single.ActionMenu.IsOpen);
 
             var screen = Forms.Screen.PrimaryScreen;
             SetCursorPos(screen.WorkingArea.Right - 35, screen.WorkingArea.Bottom + 12);

@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -381,6 +382,12 @@ namespace ScreenLine
                         Shelf.ShowCollect(item);
                         Gallery.Remove(item);
                         break;
+                    case ShotAction.RemoveLeft:
+                    case ShotAction.RemoveRight:
+                    case ShotAction.RemoveOthers:
+                    case ShotAction.RemoveAll:
+                        RemoveMany(action, item);
+                        break;
                     case ShotAction.Trash:
                         FileSystem.DeleteFile(item.Path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
                         Shelf.ShowDiscard(item);
@@ -390,6 +397,25 @@ namespace ScreenLine
                 }
             }
             catch (Exception error) { Gallery.Store.Log(error); Notice("操作未完成：" + error.Message); }
+        }
+
+        void RemoveMany(ShotAction action, CaptureItem item)
+        {
+            var hanging = Shelf.HangingItems;
+            int index = hanging.FindIndex(entry => FileRules.SameFile(entry.Path, item.Path));
+            if (index < 0) return;
+            List<CaptureItem> targets;
+            switch (action)
+            {
+                case ShotAction.RemoveLeft: targets = hanging.Take(index).ToList(); break;
+                case ShotAction.RemoveRight: targets = hanging.Skip(index + 1).ToList(); break;
+                case ShotAction.RemoveOthers: targets = hanging.Where((entry, position) => position != index).ToList(); break;
+                default: targets = hanging.ToList(); break;
+            }
+            if (targets.Count == 0) return;
+            var animated = targets.OrderBy(entry => Math.Abs(hanging.IndexOf(entry) - index)).Take(3).ToList();
+            Shelf.ShowBulkCollect(animated);
+            Gallery.RemoveRange(targets);
         }
 
         public void Dispose()
