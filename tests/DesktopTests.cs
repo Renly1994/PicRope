@@ -1876,9 +1876,13 @@ namespace ScreenLine.Tests
             string bulkDirectory = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "previews", "右键菜单"));
             Directory.CreateDirectory(bulkDirectory);
             using (var output = File.Create(Path.Combine(bulkDirectory, "批量取下.png"))) bulkEncoder.Save(output);
+            var bulkRow = (Border)middle.ActionMenu.BulkMenu.Template.FindName("Surface", middle.ActionMenu.BulkMenu);
             SetCursorPos(600, 700);
             await Task.Delay(420);
             Check(!middle.ActionMenu.BulkMenu.IsSubmenuOpen, "移开鼠标后批量取下子菜单自动收起");
+            Check(!middle.ActionMenu.BulkMenu.IsMouseOver && bulkRow.Background is SolidColorBrush
+                && ((SolidColorBrush)bulkRow.Background).Color == Colors.Transparent,
+                "移开鼠标后批量取下行取消悬停底色");
             imagePreview = RenderMenu(middle.ActionMenu);
             middle.ActionMenu.BulkActions[ShotAction.RemoveLeft].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             await Until(() => controller.Gallery.Items.Count == 3 && controller.Gallery.Items.All(entry => entry.Path != path));

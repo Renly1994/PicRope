@@ -52,7 +52,7 @@ namespace ScreenLine
       </Popup>
     </Grid>
     <ControlTemplate.Triggers>
-      <Trigger Property='IsHighlighted' Value='True'><Setter TargetName='Surface' Property='Background' Value='#F0F3F7'/></Trigger>
+      <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Surface' Property='Background' Value='#F0F3F7'/></Trigger>
       <Trigger Property='IsSubmenuOpen' Value='True'><Setter TargetName='Surface' Property='Background' Value='#F0F3F7'/></Trigger>
       <Trigger Property='IsEnabled' Value='False'><Setter Property='Opacity' Value='0.45'/><Setter Property='Cursor' Value='Arrow'/></Trigger>
     </ControlTemplate.Triggers>
