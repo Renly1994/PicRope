@@ -36,6 +36,8 @@ namespace ScreenLine
         [DllImport("user32.dll")] public static extern bool AddClipboardFormatListener(IntPtr window);
         [DllImport("user32.dll")] public static extern bool RemoveClipboardFormatListener(IntPtr window);
         [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();
+        [DllImport("user32.dll")] static extern IntPtr GetClipboardOwner();
+        [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")] static extern uint ClipboardOwnerProcess(IntPtr window, out uint process);
         [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
         [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr window, int id);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent, IntPtr child, string className, string title);
@@ -54,6 +56,16 @@ namespace ScreenLine
         }
 
         public static Point Cursor() { Point point; GetCursorPos(out point); return point; }
+
+        public static string ClipboardOwnerName()
+        {
+            uint process; ClipboardOwnerProcess(GetClipboardOwner(), out process);
+            if (process == 0) return null;
+            try { using (var owner = System.Diagnostics.Process.GetProcessById((int)process)) return owner.ProcessName; }
+            catch (ArgumentException) { return null; }
+            catch (InvalidOperationException) { return null; }
+            catch (System.ComponentModel.Win32Exception) { return null; }
+        }
 
         public static string WindowTitle(IntPtr window)
         {
@@ -131,9 +143,24 @@ namespace ScreenLine
     {
         readonly HwndSource source;
         public readonly bool ShortcutAvailable;
+        public bool CaptureShortcutAvailable { get; private set; }
+        uint captureModifiers, captureKey;
+        int captureId = 2;
         public event Action ClipboardChanged;
         public event Action ToggleRequested;
         public event Action ExitRequested;
+        public event Action CaptureRequested;
+
+        public bool RegisterCapture(uint modifiers, uint key)
+        {
+            if (modifiers == 0 || (modifiers & ~15u) != 0 || key < 0x20 || key > 0xFE) return false;
+            if (CaptureShortcutAvailable && modifiers == captureModifiers && key == captureKey) return true;
+            int next = captureId == 2 ? 3 : 2;
+            if (!WindowsNative.RegisterHotKey(source.Handle, next, modifiers | 0x4000, key)) return false;
+            if (CaptureShortcutAvailable) WindowsNative.UnregisterHotKey(source.Handle, captureId);
+            captureId = next; captureModifiers = modifiers; captureKey = key; CaptureShortcutAvailable = true;
+            return true;
+        }
 
         public WindowsEvents()
         {
@@ -146,7 +173,8 @@ namespace ScreenLine
         IntPtr Receive(IntPtr window, int message, IntPtr w, IntPtr l, ref bool handled)
         {
             if (message == 0x031D && ClipboardChanged != null) ClipboardChanged();
-            if ((message == 0x0312 || message == WindowsNative.ShowMessage) && ToggleRequested != null) ToggleRequested();
+            if ((message == WindowsNative.ShowMessage || message == 0x0312 && w.ToInt32() == 1) && ToggleRequested != null) ToggleRequested();
+            if (message == 0x0312 && w.ToInt32() == captureId && CaptureRequested != null) CaptureRequested();
             if (message == WindowsNative.ExitMessage && ExitRequested != null) ExitRequested();
             return IntPtr.Zero;
         }
@@ -155,6 +183,7 @@ namespace ScreenLine
         {
             WindowsNative.RemoveClipboardFormatListener(source.Handle);
             if (ShortcutAvailable) WindowsNative.UnregisterHotKey(source.Handle, 1);
+            if (CaptureShortcutAvailable) WindowsNative.UnregisterHotKey(source.Handle, captureId);
             source.Dispose();
         }
     }

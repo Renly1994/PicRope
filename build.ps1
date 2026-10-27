@@ -1,10 +1,11 @@
-﻿param([switch]$DesktopTests, [switch]$FolderTests, [switch]$MenuTests, [switch]$EditorTests, [switch]$ThemeTests, [switch]$WindTests, [switch]$BasketTests, [switch]$ScrollTests, [switch]$BasketAppearanceTests, [switch]$BasketMotionTests, [switch]$UpdateTests, [switch]$TextTests, [switch]$EnvelopeMotionTests, [switch]$MonitorTests, [switch]$Package)
+param([switch]$DesktopTests, [switch]$FolderTests, [switch]$MenuTests, [switch]$EditorTests, [switch]$ThemeTests, [switch]$WindTests, [switch]$BasketTests, [switch]$ScrollTests, [switch]$BasketAppearanceTests, [switch]$BasketMotionTests, [switch]$UpdateTests, [switch]$TextTests, [switch]$EnvelopeMotionTests, [switch]$MonitorTests, [switch]$ReleaseTests, [switch]$BasketLayoutTests, [switch]$BuildOnly, [switch]$Package)
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $frameworkPath = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
 $compilerPath = Join-Path $frameworkPath 'csc.exe'
 $buildPath = Join-Path $projectRoot 'build'
 New-Item -ItemType Directory -Path $buildPath -Force | Out-Null
+& (Join-Path $projectRoot 'tests\CleanArtifacts.ps1')
 $references = @(
     "/r:$frameworkPath\WPF\PresentationCore.dll",
     "/r:$frameworkPath\WPF\PresentationFramework.dll",
@@ -20,8 +21,9 @@ $references = @(
 $sources = (Get-ChildItem -LiteralPath (Join-Path $projectRoot 'src') -Filter '*.cs').FullName
 $manifestPath = Join-Path $projectRoot 'src\app.manifest'
 $iconPath = Join-Path $projectRoot 'src\assets\PicRope.ico'
-$basketResources = Get-ChildItem -LiteralPath (Join-Path $projectRoot 'src\assets') -Filter 'basket-*.png' | ForEach-Object { '/resource:' + $_.FullName + ',PicRope.Basket.' + $_.BaseName.Substring(7) }
-$basketResources += @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'src\assets') -Filter 'envelope-*.png' | ForEach-Object { '/resource:' + $_.FullName + ',PicRope.Envelope.' + $_.BaseName.Substring(9) })
+& (Join-Path $projectRoot 'packaging\prepare-assets.ps1')
+$basketResources = Get-ChildItem -LiteralPath (Join-Path $buildPath 'runtime-assets') -Filter 'basket-*.png' | ForEach-Object { '/resource:' + $_.FullName + ',PicRope.Basket.' + $_.BaseName.Substring(7) }
+$basketResources += @(Get-ChildItem -LiteralPath (Join-Path $buildPath 'runtime-assets') -Filter 'envelope-*.png' | ForEach-Object { '/resource:' + $_.FullName + ',PicRope.Envelope.' + $_.BaseName.Substring(9) })
 & $compilerPath /nologo /target:winexe /platform:x64 /optimize+ /codepage:65001 "/out:$buildPath\PicRope.exe" "/win32manifest:$manifestPath" "/win32icon:$iconPath" "/resource:$iconPath,PicRope.Icon" $basketResources $references $sources
 if ($LASTEXITCODE -ne 0) { throw '应用构建失败' }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'src\App.config') -Destination (Join-Path $buildPath 'PicRope.exe.config')
@@ -37,7 +39,7 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'vendor\WebView2\LICENSE.txt'),(J
 Copy-Item -LiteralPath (Join-Path $projectRoot 'vendor\WebView2\Microsoft.Web.WebView2.Core.dll'),(Join-Path $projectRoot 'vendor\WebView2\Microsoft.Web.WebView2.Wpf.dll'),(Join-Path $projectRoot 'vendor\WebView2\WebView2Loader.dll') -Destination $buildPath
 Write-Output ('构建完成：' + (Join-Path $buildPath 'PicRope.exe'))
 
-if (-not ($FolderTests -or $MenuTests -or $EditorTests -or $ThemeTests -or $WindTests -or $EnvelopeMotionTests) -and (Test-Path -LiteralPath (Join-Path $projectRoot 'tests\CoreTests.cs'))) {
+if (-not $BuildOnly -and -not ($FolderTests -or $MenuTests -or $EditorTests -or $ThemeTests -or $WindTests -or $EnvelopeMotionTests) -and (Test-Path -LiteralPath (Join-Path $projectRoot 'tests\CoreTests.cs'))) {
     & $compilerPath /nologo /target:exe /codepage:65001 "/out:$buildPath\CoreTests.exe" /main:ScreenLine.Tests.CoreTests $references (Join-Path $projectRoot 'src\Core.cs') (Join-Path $projectRoot 'src\SpringMotion.cs') (Join-Path $projectRoot 'tests\CoreTests.cs')
     if ($LASTEXITCODE -ne 0) { throw '核心测试构建失败' }
     & (Join-Path $buildPath 'CoreTests.exe')
@@ -95,6 +97,21 @@ if ($EnvelopeMotionTests) {
     if ($LASTEXITCODE -ne 0) { throw '信封动效测试构建失败' }
     & (Join-Path $buildPath 'EnvelopeMotionTests.exe')
     if ($LASTEXITCODE -ne 0) { throw '信封动效测试未通过' }
+}
+
+if ($ReleaseTests) {
+    & $compilerPath /nologo /target:exe /platform:x64 /codepage:65001 "/out:$buildPath\ReleaseTests.exe" /main:ScreenLine.Tests.ReleaseTests "/win32manifest:$manifestPath" "/resource:$iconPath,PicRope.Icon" $basketResources $references $sources (Join-Path $projectRoot 'tests\ReleaseTests.cs')
+    if ($LASTEXITCODE -ne 0) { throw '专项验证程序构建失败' }
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'src\App.config') -Destination (Join-Path $buildPath 'ReleaseTests.exe.config')
+    & (Join-Path $buildPath 'ReleaseTests.exe')
+    if ($LASTEXITCODE -ne 0) { throw '专项验证未通过' }
+}
+
+if ($BasketLayoutTests) {
+    & $compilerPath /nologo /target:exe /platform:x64 /codepage:65001 "/out:$buildPath\BasketLayoutTests.exe" /main:ScreenLine.Tests.BasketLayoutTests "/win32manifest:$manifestPath" "/resource:$iconPath,PicRope.Icon" $basketResources $references $sources (Join-Path $projectRoot 'tests\BasketLayoutTests.cs')
+    if ($LASTEXITCODE -ne 0) { throw '布局验证程序构建失败' }
+    & (Join-Path $buildPath 'BasketLayoutTests.exe')
+    if ($LASTEXITCODE -ne 0) { throw '布局验证未通过' }
 }
 
 if ($MonitorTests) { & (Join-Path $projectRoot 'tests\MonitorTests.ps1') }

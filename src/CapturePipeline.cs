@@ -10,6 +10,12 @@ using System.Windows.Threading;
 
 namespace ScreenLine
 {
+    internal sealed class ClipboardPicture
+    {
+        public byte[] Bytes;
+        public string Extension;
+    }
+
     internal sealed class CapturePipeline : IDisposable
     {
         readonly Gallery gallery;
@@ -48,6 +54,7 @@ namespace ScreenLine
                 gallery.Store.Save();
                 clipboardSequence = WindowsNative.GetClipboardSequenceNumber();
                 clipboardDue = DateTime.MaxValue;
+                gallery.Notify();
             }
         }
 
@@ -83,7 +90,7 @@ namespace ScreenLine
                 if (!File.Exists(path)) continue;
                 try
                 {
-                    ImageContent image = await Task.Run(() => ImageContent.Read(path));
+                    ImageContent image = await Task.Run(() => ImageContent.Read(path, false));
                     if (disposed) return;
                     if (saved.Contains(path, StringComparer.OrdinalIgnoreCase)) gallery.Add(path, image);
                     else gallery.Collect(path, image);
@@ -186,6 +193,23 @@ namespace ScreenLine
             if (Arrived != null) Arrived(item, null);
         }
 
+        public async Task<string> AcceptCapture(BitmapSource picture)
+        {
+            byte[] png = await Task.Run(() => ImageContent.EncodeClipboard(picture));
+            ImageContent image = await Task.Run(() => ImageContent.Decode(png));
+            string path = Path.Combine(gallery.Store.Inbox, "截图_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + "_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".png");
+            Directory.CreateDirectory(gallery.Store.Inbox);
+            await Task.Run(() => File.WriteAllBytes(path, png));
+            if (disposed) return path;
+            receipts.Accept(image.Fingerprint, CaptureSource.Clipboard, DateTime.UtcNow);
+            if (AutoHang) { gallery.Add(path, image); if (Arrived != null) Arrived(gallery.Items.Last(), null); }
+            else gallery.Collect(path, image);
+            var data = new DataObject(); data.SetImage(picture); data.SetData("PNG", new MemoryStream(png)); data.SetData(ClipboardRules.OwnFormat, "1");
+            data.SetFileDropList(new System.Collections.Specialized.StringCollection { path });
+            await WindowsClipboard.Write(data); IgnoreCurrentClipboard();
+            return path;
+        }
+
         async void Refresh(CaptureItem item)
         {
             processing.Add(item.Path);
@@ -212,37 +236,16 @@ namespace ScreenLine
             try
             {
                 if (!CollectClipboard || sequence == clipboardSequence) return;
-                IDataObject data = null;
-                for (int attempt = 0; attempt < 5; attempt++)
-                {
-                    try { data = Clipboard.GetDataObject(); break; }
-                    catch (ExternalException) { }
-                    await Task.Delay(50);
-                }
-                if (data == null || WindowsNative.GetClipboardSequenceNumber() != sequence) return;
                 clipboardSequence = sequence;
-                if (!ClipboardRules.IsPlainImage(data.GetFormats())) return;
-                byte[] png = null;
-                var stream = data.GetData("PNG") as Stream ?? data.GetData("image/png") as Stream;
-                if (stream != null)
-                {
-                    using (var memory = new MemoryStream()) { stream.Position = 0; stream.CopyTo(memory); png = memory.ToArray(); }
-                }
-                else
-                {
-                    BitmapSource image = Clipboard.GetImage();
-                    if (image == null) return;
-                    image.Freeze();
-                    png = await Task.Run(() => ImageContent.EncodeClipboard(image));
-                }
-                if (png.Length > 64L * 1024 * 1024) return;
-                ImageContent content = await Task.Run(() => ImageContent.Decode(png));
+                ClipboardPicture picture = await ReadClipboardImage(sequence);
+                if (picture == null || disposed || !CollectClipboard || WindowsNative.GetClipboardSequenceNumber() != sequence) return;
+                ImageContent content = await Task.Run(() => ImageContent.Decode(picture.Bytes));
                 if (disposed || !CollectClipboard || WindowsNative.GetClipboardSequenceNumber() != sequence) return;
                 if (!receipts.Accept(content.Fingerprint, CaptureSource.Clipboard, DateTime.UtcNow)) return;
                 Directory.CreateDirectory(gallery.Store.Inbox);
-                string path = Path.Combine(gallery.Store.Inbox, "截图_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + "_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".png");
-                await Task.Run(() => File.WriteAllBytes(path, png));
-                if (disposed) return;
+                string path = Path.Combine(gallery.Store.Inbox, "截图_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + "_" + Guid.NewGuid().ToString("N").Substring(0, 8) + picture.Extension);
+                await Task.Run(() => File.WriteAllBytes(path, picture.Bytes));
+                if (disposed || !CollectClipboard || WindowsNative.GetClipboardSequenceNumber() != sequence) { File.Delete(path); return; }
                 if (!AutoHang) gallery.Collect(path, content);
                 else
                 {
@@ -253,9 +256,54 @@ namespace ScreenLine
             catch (Exception error)
             {
                 gallery.Store.Log(error);
-                if (Failed != null) Failed("这张截图暂时无法读取，请重试。");
+                if (Failed != null) Failed("这张图片暂时无法读取，请重试。");
             }
             finally { clipboardBusy = false; }
+        }
+
+        internal static Task<ClipboardPicture> ReadClipboardImage(uint sequence)
+        {
+            return WindowsClipboard.ReadOnSta(delegate
+            {
+                IDataObject data = null;
+                for (int attempt = 0; attempt < 5; attempt++)
+                {
+                    if (WindowsNative.GetClipboardSequenceNumber() != sequence) return null;
+                    try { data = Clipboard.GetDataObject(); break; }
+                    catch (ExternalException) { System.Threading.Thread.Sleep(50); }
+                }
+                if (data == null || WindowsNative.GetClipboardSequenceNumber() != sequence) return null;
+                string source = WindowsNative.ClipboardOwnerName();
+                if (WindowsNative.GetClipboardSequenceNumber() != sequence) return null;
+                return ReadImage(data, source).GetAwaiter().GetResult();
+            });
+        }
+
+        internal static async Task<ClipboardPicture> ReadImage(IDataObject data, string source)
+        {
+            string imageFile;
+            if (!ClipboardRules.IsImage(data, source, out imageFile)) return null;
+            if (imageFile != null)
+            {
+                byte[] original = await Task.Run(delegate
+                {
+                    using (var stream = new FileStream(imageFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                    {
+                        if (stream.Length == 0 || stream.Length > 64L * 1024 * 1024) throw new InvalidDataException("图片文件大小无效");
+                        return WindowsClipboard.ReadImageBytes(stream);
+                    }
+                });
+                return new ClipboardPicture { Bytes = original, Extension = Path.GetExtension(imageFile) };
+            }
+            string extension;
+            byte[] bytes = WindowsClipboard.ReadEncodedImage(data, out extension);
+            if (bytes == null)
+            {
+                BitmapSource image = data.GetData(DataFormats.Bitmap) as BitmapSource;
+                if (image == null) return null;
+                image.Freeze(); bytes = await Task.Run(() => ImageContent.EncodeClipboard(image)); extension = ".png";
+            }
+            return bytes.Length > 64L * 1024 * 1024 ? null : new ClipboardPicture { Bytes = bytes, Extension = extension };
         }
 
         public void Dispose()

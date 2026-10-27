@@ -23,10 +23,11 @@ namespace ScreenLine.Tests
         static Forms.IDataObject previous;
         static uint lastSequence;
         [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+        [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
         [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(WindowsNative.Point point);
 
         [STAThread]
-        public static void Main()
+        public static void Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
             var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -37,7 +38,7 @@ namespace ScreenLine.Tests
             };
             app.Startup += async delegate
             {
-                try { await Run(); Console.WriteLine("文字功能测试：{0} 项通过", checks); }
+                try { await Run(args.Contains("--selection-only")); Console.WriteLine("文字功能测试：{0} 项通过", checks); }
                 catch (Exception error) { Console.WriteLine("文字功能测试失败：" + error); Environment.ExitCode = 1; }
                 finally
                 {
@@ -54,7 +55,7 @@ namespace ScreenLine.Tests
             app.Run();
         }
 
-        static async Task Run()
+        static async Task Run(bool selectionOnly)
         {
             var original = Forms.Clipboard.GetDataObject();
             if (original != null)
@@ -78,14 +79,13 @@ namespace ScreenLine.Tests
             shelf.Reveal(true, true, 60); shelf.ChoosingTexts = true;
             await Task.Delay(500);
             Open();
+            if (selectionOnly) { await CheckSingleSelection(); return; }
             Check(window.VisibleCount == 0 && AutomationProperties.GetItemStatus(shelf.TextButton) == "0 条文字", "初始为空，文字入口数量为零");
-            var textBounds = shelf.TextButton.TransformToAncestor(shelf).TransformBounds(new Rect(shelf.TextButton.RenderSize));
-            var basketBounds = shelf.BasketButton.TransformToAncestor(shelf).TransformBounds(new Rect(shelf.BasketButton.RenderSize));
-            Check(textBounds.Right <= basketBounds.Left && textBounds.Left > shelf.ActualWidth / 2, "文字固定入口紧邻篮子左侧，二者点击范围分开");
+            Check(!shelf.TextButton.IsVisible && !shelf.BasketButton.IsVisible, "收集默认关闭时隐藏信封和篮子");
 
             var textSwitch = controller.TrayMenu.Text;
             Check(textSwitch.IsChecked == false, "托盘提供独立的文字剪贴板收集开关，默认关闭");
-            Check(Children<Button>(window).Count() == 1, "空列表仅保留关闭按钮，不再提供手动收集步骤");
+            Check(!window.SelectAllButton.IsEnabled && !window.DeleteSelectedButton.IsEnabled, "空列表禁用全选和批量删除");
             await WriteText("尚未开启文字收集时复制的内容"); await Task.Delay(180);
             Check(controller.Texts.Items.Count == 0, "开关关闭时复制文字不会收集");
             textSwitch.IsChecked = true;
@@ -148,12 +148,13 @@ namespace ScreenLine.Tests
             }
             store.Save(); window.Close(); Open();
             window.List.SelectedItem = null;
+            controller.TrayMenu.Pictures.IsChecked = true;
             foreach (var theme in LineTheme.All)
             {
                 shelf.ApplyTheme(theme); shelf.UpdateLayout(); window.Position();
                 await Task.Delay(80);
                 var source = TextEnvelope.Source(theme);
-                Check(source.IsFrozen && source.PixelWidth > 500 && source.PixelHeight > 500, theme.Name + "加载独立透明信封素材");
+                Check(source.IsFrozen && source.PixelWidth >= 240 && source.PixelWidth <= 384 && source.PixelHeight <= 384, theme.Name + "加载适配高 DPI 的紧凑透明信封素材");
                 var clip = Children<ClothesClip>(shelf.TextButton).Single();
                 Check(clip.Appearance == theme, theme.Name + "信封挂件与绳子皮肤同步");
                 var envelope = Children<Image>(shelf.TextButton).Single();
@@ -284,6 +285,59 @@ namespace ScreenLine.Tests
             var saved = new StateStore(root).State;
             Check(saved.Images.SequenceEqual(new[] { second, first }) && saved.Collection.Count == 3 && !saved.AutoHang
                 && saved.Theme == "graphite" && saved.Texts.Single().Content == "重启后保留的文字", "恢复挂图时保留待挂图片、文字和外观设置");
+        }
+
+        static async Task CheckSingleSelection()
+        {
+            var pointer = WindowsNative.Cursor();
+            var foreground = WindowsNative.GetForegroundWindow();
+            try
+            {
+                controller.Texts.Add("片头先展示操作结果，再说明具体步骤。");
+                controller.Texts.Add("拍摄清单\n1. 检查麦克风电量\n2. 确认相机存储卡");
+                controller.Texts.Add("会议时间：10月28日 14:30，提前准备演示材料。");
+                WindowsNative.ActivateEditor(new System.Windows.Interop.WindowInteropHelper(window).Handle);
+                var area = controller.Shelf.Display.WorkingArea;
+                SetCursorPos(area.Left + 20, area.Bottom - 20);
+                await Task.Delay(100); window.UpdateLayout();
+                var rows = Enumerable.Range(0, 3).Select(i => (ListBoxItem)window.List.ItemContainerGenerator.ContainerFromIndex(i)).ToArray();
+                var choices = rows.Select(row => Children<CheckBox>(row).Single()).ToArray();
+                var mark = (Border)choices[0].Template.FindName("Mark", choices[0]);
+                Check(mark.Opacity == 0 && choices.All(choice => choice.IsChecked == false), "未悬停且未选中时隐藏选择框");
+                Export("单选-静止隐藏", controller.Shelf, window);
+                var hover = rows[0].PointToScreen(new Point(70, 18));
+                SetCursorPos((int)hover.X, (int)hover.Y); await Task.Delay(100);
+                Check(rows[0].IsMouseOver && mark.Opacity == 1 && choices[0].IsChecked == false, "悬停正文时显示该条可点击的选择框");
+                Export("单选-悬停可选", controller.Shelf, window);
+                await Click(choices[0]);
+                Check(controller.Texts.Items.Count(item => item.IsMarked) == 1 && ((TextItem)choices[0].DataContext).IsMarked
+                    && window.DeleteSelectedButton.IsEnabled && window.DeleteSelectedButton.Content.ToString().Contains("1"), "真实鼠标仅勾选当前一条，并更新批量删除数量");
+                SetCursorPos(area.Left + 20, area.Bottom - 20); await Task.Delay(60);
+                Check(mark.Opacity == 1, "选中后移开鼠标仍保留勾选标记");
+                Export("单选-鼠标勾选", controller.Shelf, window);
+                await Click(choices[0]);
+                Check(controller.Texts.Items.All(item => !item.IsMarked) && !window.DeleteSelectedButton.IsEnabled, "真实鼠标再次点击可取消单条选择");
+                await Click(Children<TextBlock>(rows[1]).First());
+                Check(rows[1].IsSelected && Children<TextBox>(rows[1]).Single().IsVisible, "点击正文仍可展开全文阅读");
+                SetCursorPos(area.Left + 20, area.Bottom - 20); await Task.Delay(60);
+                Check(((Border)choices[1].Template.FindName("Mark", choices[1])).Opacity == 1, "点击激活的条目移开鼠标后仍显示选择框");
+                await Click(choices[1]);
+                Check(controller.Texts.Items.Count(item => item.IsMarked) == 1 && ((TextItem)choices[1].DataContext).IsMarked, "展开全文后仍可用鼠标单独勾选该条");
+                await Click(choices[1]);
+                Check(controller.Texts.Items.Count == 3 && controller.Texts.Items.All(item => !item.IsMarked), "取消勾选后保留全部原文");
+            }
+            finally
+            {
+                window.Close(); SetCursorPos(pointer.X, pointer.Y); WindowsNative.SetForegroundWindow(foreground);
+            }
+        }
+
+        static async Task Click(FrameworkElement element)
+        {
+            var target = element.PointToScreen(new Point(element.ActualWidth / 2, element.ActualHeight / 2));
+            SetCursorPos((int)target.X, (int)target.Y); await Task.Delay(60);
+            mouse_event(2, 0, 0, 0, UIntPtr.Zero); mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+            await Task.Delay(80); window.UpdateLayout();
         }
 
         static void Open()

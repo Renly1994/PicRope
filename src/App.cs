@@ -18,9 +18,9 @@ using Forms = System.Windows.Forms;
 [assembly: AssemblyTitle("PicRope · 图绳")]
 [assembly: AssemblyProduct("PicRope")]
 [assembly: AssemblyDescription("图绳：把截图挂在屏幕上沿，随手复制、拖拽和保存。")]
-[assembly: AssemblyVersion("1.1.1.0")]
-[assembly: AssemblyFileVersion("1.1.1.0")]
-[assembly: AssemblyInformationalVersion("1.1.1")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyInformationalVersion("1.2.0")]
 
 namespace ScreenLine
 {
@@ -40,6 +40,9 @@ namespace ScreenLine
         internal AppearanceWindow Appearance { get; private set; }
         internal BasketWindow Basket { get; private set; }
         internal TextWindow TextWindow { get; private set; }
+        internal CaptureWindow Capture { get; private set; }
+        internal ShortcutWindow ShortcutSettings { get; private set; }
+        readonly MenuItem captureMenu;
         internal readonly List<ImageEditorWindow> Editors = new List<ImageEditorWindow>();
         readonly AppUpdates updates = new AppUpdates();
         readonly CancellationTokenSource updateLifetime = new CancellationTokenSource();
@@ -64,6 +67,8 @@ namespace ScreenLine
             Shelf.TextRequested += ShowTexts;
             Texts.Changed += Shelf.UpdateTexts;
             events = new WindowsEvents();
+            events.RegisterCapture(store.State.CaptureModifiers, store.State.CaptureKey);
+            events.CaptureRequested += ShowCapture;
             events.ToggleRequested += Shelf.Toggle;
             events.ExitRequested += Exit;
             events.ClipboardChanged += Captures.ClipboardChanged;
@@ -97,6 +102,25 @@ namespace ScreenLine
             });
             TrayMenu.OnAction(TrayMenu.AppearanceButton, ShowAppearance);
             var more = TrayMenu.MoreMenu;
+            MenuItem previewToggle = null;
+            previewToggle = more.AddAction("悬停预览", "picture", delegate
+            {
+                bool previous = store.State.HoverPreview;
+                store.State.HoverPreview = previewToggle.IsChecked;
+                try { store.Save(); Shelf.Preview.SetEnabled(store.State.HoverPreview); }
+                catch (Exception error) { store.State.HoverPreview = previous; previewToggle.IsChecked = previous; store.Log(error); Notice("预览设置保存失败"); }
+            });
+            previewToggle.IsCheckable = true;
+            previewToggle.IsChecked = store.State.HoverPreview;
+            captureMenu = more.AddAction("区域截图", "capture", ShowCapture);
+            UpdateCaptureLabel();
+            more.AddAction("截图快捷键…", "shortcut", delegate
+            {
+                if (ShortcutSettings != null) { ShortcutSettings.Activate(); return; }
+                ShortcutSettings = new ShortcutWindow(store.State.CaptureModifiers, store.State.CaptureKey, SetCaptureShortcut);
+                ShortcutSettings.Closed += delegate { ShortcutSettings = null; }; ShortcutSettings.Show();
+            });
+            more.Separator();
             more.AddAction("添加图片…", "add", async delegate
             {
                 var picker = new OpenFileDialog { Title = "添加图片", Filter = "图片|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff", Multiselect = true };
@@ -144,6 +168,47 @@ namespace ScreenLine
             Shelf.Reveal(true, false, 4);
             await Captures.Start();
             if (automaticUpdates) updateTimer.Start();
+        }
+
+        void UpdateCaptureLabel()
+        {
+            captureMenu.InputGestureText = events.CaptureShortcutAvailable ? ShortcutWindow.Label(Gallery.Store.State.CaptureModifiers, Gallery.Store.State.CaptureKey) : "快捷键被占用";
+        }
+
+        internal bool SetCaptureShortcut(uint modifiers, uint key)
+        {
+            if (!events.RegisterCapture(modifiers, key)) return false;
+            uint previousModifiers = Gallery.Store.State.CaptureModifiers, previousKey = Gallery.Store.State.CaptureKey;
+            Gallery.Store.State.CaptureModifiers = modifiers; Gallery.Store.State.CaptureKey = key;
+            try { Gallery.Store.Save(); }
+            catch (Exception error)
+            {
+                Gallery.Store.State.CaptureModifiers = previousModifiers; Gallery.Store.State.CaptureKey = previousKey;
+                events.RegisterCapture(previousModifiers, previousKey); Gallery.Store.Log(error); Notice("无法保存快捷键，请重试。"); return false;
+            }
+            UpdateCaptureLabel(); return true;
+        }
+
+        internal async void ShowCapture()
+        {
+            if (disposed || Shelf.Capturing) return;
+            Shelf.Capturing = true;
+            var display = WindowsNative.ScreenAtPointer();
+            bool revealed = Shelf.Revealed;
+            try
+            {
+                TrayMenu.Close(); if (Basket != null) Basket.Close(); if (TextWindow != null) TextWindow.Close();
+                if (Appearance != null) Appearance.Close(); if (ShortcutSettings != null) ShortcutSettings.Close();
+                Shelf.Reveal(false, false, 0); await Task.Delay(260);
+                if (disposed) return;
+                Capture = new CaptureWindow(display);
+                var result = await Capture.PickAsync(); Capture = null;
+                if (disposed) return;
+                if (result != null) await Captures.AcceptCapture(result);
+                else if (revealed) Shelf.Reveal(true, false, 2);
+            }
+            catch (Exception error) { if (!disposed) { Gallery.Store.Log(error); Notice("截图未完成，请重试。"); } }
+            finally { if (Capture != null) Capture.Close(); Capture = null; Shelf.Capturing = false; }
         }
 
         async Task CheckForUpdates(bool manual)
@@ -218,7 +283,7 @@ namespace ScreenLine
             int version = textClipboardVersion;
             try
             {
-                string content = await WindowsClipboard.ReadText();
+                string content = await WindowsClipboard.ReadText(sequence);
                 if (disposed || !Texts.CollectClipboard || version != textClipboardVersion || sequence != WindowsNative.GetClipboardSequenceNumber()) return;
                 Texts.Add(content);
             }
@@ -305,6 +370,7 @@ namespace ScreenLine
                         }
                         payload.SetData("PNG", new MemoryStream(png));
                         payload.SetFileDropList(new StringCollection { item.Path });
+                        payload.SetData(ClipboardRules.OwnFormat, "1");
                         await WindowsClipboard.Write(payload);
                         Shelf.ShowCopied(item.Path);
                         break;
@@ -354,6 +420,8 @@ namespace ScreenLine
         public void Dispose()
         {
             disposed = true; updateTimer.Stop(); updateLifetime.Cancel();
+            if (Capture != null) Capture.Close();
+            if (ShortcutSettings != null) ShortcutSettings.Close();
             if (updateWindow != null) updateWindow.Close();
             updates.Dispose();
             if (Basket != null) Basket.Close();

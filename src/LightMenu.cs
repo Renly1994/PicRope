@@ -60,6 +60,8 @@ namespace ScreenLine
 
         static readonly Dictionary<string, string> icons = new Dictionary<string, string>
         {
+            { "capture", "M8,3 H3 V8 M16,3 H21 V8 M3,16 V21 H8 M21,16 V21 H16 M8,8 H16 V16 H8 Z" },
+            { "shortcut", "M4,5 H20 Q22,5 22,7 V17 Q22,19 20,19 H4 Q2,19 2,17 V7 Q2,5 4,5 Z M6,9 H7 M11,9 H12 M16,9 H17 M6,13 H7 M11,13 H12 M16,13 H17 M7,16 H17" },
             { "copy", "M10,8 H18 Q20,8 20,10 V19 Q20,21 18,21 H10 Q8,21 8,19 V10 Q8,8 10,8 Z M16,8 V5 Q16,3 14,3 H5 Q3,3 3,5 V14 Q3,16 5,16 H8" },
             { "open", "M9,4 H5 Q3,4 3,6 V19 Q3,21 5,21 H18 Q20,21 20,19 V15 M14,3 H21 V10 M21,3 L10,14" },
             { "edit", "M15,5 L19,9 M4,20 L8,19 L20,7 Q22,5 20,3 Q18,1 16,3 L4,15 L3,21 L8,19" },

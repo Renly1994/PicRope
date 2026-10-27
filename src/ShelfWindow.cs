@@ -24,6 +24,7 @@ namespace ScreenLine
     {
         readonly Gallery gallery;
         readonly Action<ShotAction, CaptureItem> act;
+        internal readonly HoverPreview Preview;
         readonly ScrollViewer viewport = new ScrollViewer();
         readonly Canvas content = new Canvas();
         readonly System.Windows.Shapes.Path rope = new System.Windows.Shapes.Path();
@@ -48,6 +49,7 @@ namespace ScreenLine
         public event Action BasketRequested;
         internal readonly Button TextButton = new Button();
         readonly EnvelopeIcon envelopeImage = new EnvelopeIcon { Width = 96, Height = 86, Stretch = Stretch.Fill, IsHitTestVisible = false };
+        readonly Canvas basketHolder, textHolder;
         readonly ClothesClip textClip = new ClothesClip();
         readonly TextBlock textCount = new TextBlock { FontFamily = new FontFamily("Segoe UI"), FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, TextAlignment = TextAlignment.Center };
         readonly Border textCounter = new Border();
@@ -63,12 +65,13 @@ namespace ScreenLine
         readonly Dictionary<string, PinnedImageWindow> pins = new Dictionary<string, PinnedImageWindow>(StringComparer.OrdinalIgnoreCase);
         bool closing;
         readonly DispatcherTimer pointer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(30) };
+        readonly DispatcherTimer scrollHover = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
         DateTime edgeSince = DateTime.MaxValue, awaySince = DateTime.MaxValue, peekUntil;
         DateTime nextGust;
         double lastFrame, hideTime, hideFrom, drawnWidth = -1, drawnSag = -1;
         double lastScrollOffset;
         bool rendering;
-        bool pinned, previousDown, suppressEdge;
+        bool pinned, previousDown, suppressEdge, trackingScrollHover;
         string viewingName;
         IntPtr viewingWindow;
         DateTime viewerSearchUntil;
@@ -79,13 +82,16 @@ namespace ScreenLine
         internal bool ChoosingAppearance { get; set; }
         internal bool ChoosingBasket { get; set; }
         internal bool ChoosingTexts { get; set; }
-        double PhotoWidth { get { return Math.Max(1, (ActualWidth > 0 ? ActualWidth : Width) - 308); } }
-        double LineWidth { get { return PhotoWidth + 260; } }
+        internal bool Capturing { get; set; }
+        double AccessoryWidth { get { return (gallery.Store.State.CollectClipboard ? 156 : 0) + (gallery.Store.State.CollectTextClipboard ? 104 : 0); } }
+        double PhotoWidth { get { return Math.Max(1, (ActualWidth > 0 ? ActualWidth : Width) - 48 - AccessoryWidth); } }
+        double LineWidth { get { return PhotoWidth + AccessoryWidth; } }
         double ScrollLimit { get { return Math.Max(0, content.Width - PhotoWidth); } }
         internal Point TextAnchor
         {
             get
             {
+                if (!TextButton.IsVisible) return new Point(Display.WorkingArea.Right - 80, Display.WorkingArea.Top + 160 * WindowsNative.MonitorScale(Display));
                 var point = textCounter.PointToScreen(new Point(textCounter.ActualWidth / 2, textCounter.ActualHeight + 4));
                 point.Y -= slide.Y * WindowsNative.MonitorScale(Display);
                 return point;
@@ -96,6 +102,14 @@ namespace ScreenLine
         {
             this.gallery = gallery;
             this.act = act;
+            Preview = new HoverPreview(this, gallery.Store.State.HoverPreview);
+            scrollHover.Tick += delegate
+            {
+                scrollHover.Stop(); trackingScrollHover = false;
+                if (!Revealed || Mouse.LeftButton != MouseButtonState.Released || Mouse.RightButton != MouseButtonState.Released) return;
+                var card = cards.Values.FirstOrDefault(item => item.Surface.IsMouseOver && !item.Grip.IsMouseOver);
+                if (card != null) Preview.Enter(card);
+            };
             Title = "PicRope · 图绳";
             Width = 1000;
             Height = 220;
@@ -113,16 +127,24 @@ namespace ScreenLine
             viewport.RenderTransform = slide;
             viewport.ScrollChanged += delegate(object sender, ScrollChangedEventArgs e)
             {
+                if (e.HorizontalChange != 0)
+                {
+                    Preview.Dismiss();
+                    if (trackingScrollHover) { scrollHover.Stop(); scrollHover.Start(); }
+                }
                 if (e.ExtentWidthChange != 0 || e.ViewportWidthChange != 0) lastScrollOffset = viewport.HorizontalOffset;
                 foreach (var card in cards.Values) card.Frame(0, ropeMotion.Position, LineWidth, viewport.HorizontalOffset);
                 UpdateEdgeMask();
             };
             viewport.PreviewMouseWheel += delegate(object sender, MouseWheelEventArgs e)
             {
+                Preview.Dismiss();
+                trackingScrollHover = true; scrollHover.Stop(); scrollHover.Start();
                 double target = Math.Max(0, Math.Min(ScrollLimit, scrollMotion.Target - e.Delta));
                 if (Math.Abs(target - scrollMotion.Target) > 0.01)
                 {
                     scrollMotion.Target = target;
+                    StartRendering();
                     nextGust = DateTime.UtcNow.AddSeconds(7 + random.NextDouble() * 17);
                 }
                 e.Handled = true;
@@ -134,7 +156,7 @@ namespace ScreenLine
             Appearance = LineTheme.FromId(gallery.Store.State.Theme);
             RopeLine.Apply(rope, Appearance);
 
-            var basket = new Canvas { Width = 156, Height = 220, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 24, 0), RenderTransform = slide };
+            var basket = basketHolder = new Canvas { Width = 156, Height = 220, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 24, 0), RenderTransform = slide };
             var basketBody = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
             basketImage.Source = PictureBasket.Source(Appearance);
             RenderOptions.SetBitmapScalingMode(basketImage, BitmapScalingMode.HighQuality);
@@ -158,7 +180,7 @@ namespace ScreenLine
             basket.Children.Add(BasketButton); Canvas.SetLeft(BasketButton, 6); Canvas.SetTop(BasketButton, 20);
             root.Children.Add(basket);
 
-            var textHolder = new Canvas { Width = 112, Height = 220, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 166, 0), RenderTransform = slide };
+            textHolder = new Canvas { Width = 112, Height = 220, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 166, 0), RenderTransform = slide };
             var textBody = new Grid { Width = 96, Height = 154 };
             envelopeImage.Apply(Appearance);
             envelopeImage.HorizontalAlignment = HorizontalAlignment.Center; envelopeImage.VerticalAlignment = VerticalAlignment.Top;
@@ -220,6 +242,8 @@ namespace ScreenLine
             Closed += delegate
             {
                 closing = true;
+                scrollHover.Stop(); trackingScrollHover = false;
+                Preview.Dispose();
                 foreach (var pin in pins.Values.ToArray()) pin.Close();
                 pointer.Stop();
                 StopRendering();
@@ -253,6 +277,8 @@ namespace ScreenLine
 
         void MoveToDisplay()
         {
+            scrollHover.Stop(); trackingScrollHover = false;
+            Preview.Dismiss();
             var screen = SelectedDisplay();
             Display = screen;
             double scale = WindowsNative.MonitorScale(screen);
@@ -274,6 +300,8 @@ namespace ScreenLine
 
         public void Update()
         {
+            Preview.Dismiss();
+            UpdateAccessories();
             var retained = new HashSet<string>(gallery.Items.Select(i => i.Path), StringComparer.OrdinalIgnoreCase);
             foreach (string gone in cards.Keys.Where(k => !retained.Contains(k)).ToArray())
             {
@@ -289,6 +317,11 @@ namespace ScreenLine
                 if (!cards.TryGetValue(item.Path, out card))
                 {
                     card = new ShotCard(item, act);
+                    var hovered = card;
+                    card.Surface.MouseEnter += delegate { Preview.Enter(hovered); };
+                    card.Surface.MouseLeave += delegate { Preview.Leave(hovered); };
+                    card.PreviewMouseDown += delegate { scrollHover.Stop(); trackingScrollHover = false; Preview.Dismiss(); };
+                    card.Grip.MouseEnter += delegate { Preview.Dismiss(); };
                     card.ApplyTheme(Appearance, gallery.Items.IndexOf(item));
                     var mounted = card;
                     card.Grip.Click += async delegate { await ReleasePhoto(mounted); };
@@ -373,8 +406,22 @@ namespace ScreenLine
 
         internal void UpdateTexts()
         {
+            UpdateAccessories();
             textCount.Text = gallery.Store.State.Texts.Count.ToString();
             AutomationProperties.SetItemStatus(TextButton, textCount.Text + " 条文字");
+            if (Display != null) LayoutCards();
+        }
+
+        void UpdateAccessories()
+        {
+            bool pictures = gallery.Store.State.CollectClipboard, texts = gallery.Store.State.CollectTextClipboard;
+            BasketButton.Visibility = basketHolder.Visibility = pictures ? Visibility.Visible : Visibility.Collapsed;
+            TextButton.Visibility = textHolder.Visibility = texts ? Visibility.Visible : Visibility.Collapsed;
+            textHolder.Margin = new Thickness(0, 0, pictures ? 166 : 24, 0);
+            viewport.Margin = new Thickness(24, 0, 24 + AccessoryWidth, 0);
+            if (!pictures) { basketMotion.Snap(0); basketCounterMotion.Snap(1); }
+            if (!texts) envelopeImage.Reset();
+            drawnWidth = -1;
         }
 
         void UpdateEdgeMask()
@@ -454,6 +501,7 @@ namespace ScreenLine
 
         public void ShowCollect(CaptureItem item)
         {
+            if (!gallery.Store.State.CollectClipboard) return;
             ShotCard card;
             if (!Revealed || !cards.TryGetValue(item.Path, out card) || card.Flying) return;
             peekUntil = DateTime.UtcNow.AddSeconds(2);
@@ -467,7 +515,7 @@ namespace ScreenLine
 
         void BasketReceived()
         {
-            if (closing || !Revealed) return;
+            if (closing || !Revealed || !gallery.Store.State.CollectClipboard) return;
             basketMotion.Velocity = Math.Max(-48, basketMotion.Velocity - 32);
             basketCounterMotion.Velocity = Math.Min(2, basketCounterMotion.Velocity + 1.2);
             StartRendering();
@@ -545,6 +593,8 @@ namespace ScreenLine
             StartRendering();
             if (!shown)
             {
+                scrollHover.Stop(); trackingScrollHover = false;
+                Preview.Dismiss();
                 if (RopeHidden != null) RopeHidden();
                 foreach (var flight in flights.ToArray()) flight.Close();
                 basketMotion.Snap(0); basketTurn.Angle = 0;
@@ -574,6 +624,16 @@ namespace ScreenLine
             CompositionTarget.Rendering -= RenderFrame;
         }
 
+        bool NeedsRendering
+        {
+            get
+            {
+                return !revealMotion.Settled || !ropeMotion.Settled || !scrollMotion.Settled || !basketMotion.Settled
+                    || !basketCounterMotion.Settled || (gallery.Store.State.CollectTextClipboard && envelopeImage.Animating)
+                    || cards.Values.Any(card => card.Animating);
+            }
+        }
+
         void RenderFrame(object sender, EventArgs args)
         {
             double now = clock.Elapsed.TotalSeconds;
@@ -593,7 +653,7 @@ namespace ScreenLine
             DrawRope();
             basketMotion.Step(elapsed); basketTurn.Angle = basketMotion.Position;
             basketCounterMotion.Step(elapsed); basketCounterScale.ScaleX = basketCounterScale.ScaleY = basketCounterMotion.Position;
-            envelopeImage.Frame(elapsed);
+            if (gallery.Store.State.CollectTextClipboard) envelopeImage.Frame(elapsed);
             scrollMotion.Target = Math.Max(0, Math.Min(scrollMotion.Target, ScrollLimit));
             scrollMotion.Step(elapsed);
             if (scrollMotion.Position < 0 || scrollMotion.Position > ScrollLimit)
@@ -610,6 +670,7 @@ namespace ScreenLine
                 card.Frame(elapsed, ropeMotion.Position, LineWidth, viewport.HorizontalOffset);
             }
             if (!Revealed && hideTime >= 0.22) StopRendering();
+            else if (Revealed && !NeedsRendering) StopRendering();
         }
 
         bool OverControl(WindowsNative.Point cursor)
@@ -618,7 +679,7 @@ namespace ScreenLine
             var photoArea = viewport.TransformToAncestor(this).TransformBounds(new Rect(viewport.RenderSize));
             IEnumerable<FrameworkElement> targets = cards.Values.Where(c => !c.Flying && !c.Detached).SelectMany(c => new FrameworkElement[] { c.Surface, c.Grip });
             if (hint.IsVisible) targets = targets.Concat(new[] { hint });
-            targets = targets.Concat(new[] { BasketButton, TextButton });
+            targets = targets.Concat(new[] { BasketButton, TextButton }.Where(button => button.IsVisible));
             foreach (var target in targets)
             {
                 var bounds = target.TransformToAncestor(this).TransformBounds(new Rect(0, 0, target.ActualWidth, target.ActualHeight));
@@ -630,11 +691,14 @@ namespace ScreenLine
 
         void Tick(object sender, EventArgs args)
         {
+            if (Capturing) return;
             var cursor = WindowsNative.Cursor();
             var screen = SelectedDisplay();
             bool down = (WindowsNative.GetAsyncKeyState(1) & 0x8000) != 0;
             bool nearTop = cursor.X >= screen.Bounds.Left && cursor.X < screen.Bounds.Right
                 && cursor.Y >= screen.Bounds.Top && cursor.Y <= Math.Max(screen.Bounds.Top + 2, screen.WorkingArea.Top - 1);
+            var interval = TimeSpan.FromMilliseconds(Revealed || nearTop ? 30 : 100);
+            if (pointer.Interval != interval) pointer.Interval = interval;
             bool over = Revealed && OverControl(cursor);
             var now = DateTime.UtcNow;
             bool viewing = ViewingImage(now);
@@ -661,6 +725,7 @@ namespace ScreenLine
             bool busy = cards.Values.Any(c => c.Busy);
             WindowsNative.PassMouse(Handle, !Revealed || (!over && !busy));
             if (!Revealed) return;
+            if (!rendering && NeedsRendering) StartRendering();
             if (cards.Count > 0 && Math.Abs(scrollMotion.Velocity) < 8 && Math.Abs(scrollMotion.Target - viewport.HorizontalOffset) < 0.5 && !busy && now >= nextGust)
             {
                 nextGust = now.AddSeconds(7 + random.NextDouble() * 17);
@@ -716,6 +781,15 @@ namespace ScreenLine
         double entryTime, breezeDelay = -1, breezeAngle;
         ImageContent displayed;
         public bool Busy { get { return pressed || dragging || Releasing || menu.IsOpen; } }
+        internal bool Animating
+        {
+            get
+            {
+                return !xMotion.Settled || !drop.Settled || !swing.Settled || !scaleMotion.Settled || !clipMotion.Settled
+                    || breezeDelay >= 0 || entryTime < 0.16 || scaleMotion.Target != (pressed ? 0.95 : (hovering && !Releasing ? 1.035 : 1))
+                    || clipMotion.Target != (gripHover || Releasing ? 1 : 0);
+            }
+        }
         public bool Flying { get; private set; }
         public bool Detached { get; set; }
         public bool Releasing { get; private set; }

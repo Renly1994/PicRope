@@ -1,5 +1,4 @@
 using System;
-using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -19,6 +18,15 @@ namespace ScreenLine
         bool expanded;
         double sinceEnter;
         internal double Expansion { get { return letters[1].Position; } }
+        internal bool Animating
+        {
+            get
+            {
+                foreach (var motion in letters)
+                    if (!motion.Settled || motion.Position != (expanded ? 1 : 0)) return true;
+                return false;
+            }
+        }
         internal Rect BodyBounds
         {
             get
@@ -127,13 +135,7 @@ namespace ScreenLine
 
         static BitmapSource LoadPaper()
         {
-            var source = new BitmapImage();
-            using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("PicRope.Envelope.letter"))
-            {
-                source.BeginInit(); source.CacheOption = BitmapCacheOption.OnLoad; source.StreamSource = stream; source.EndInit();
-            }
-            var image = new CroppedBitmap(source, new Int32Rect(212, 115, 830, 1055));
-            image.Freeze(); return image;
+            return SkinImages.Crop("PicRope.Envelope.letter", new Int32Rect(212, 115, 830, 1055));
         }
     }
 }

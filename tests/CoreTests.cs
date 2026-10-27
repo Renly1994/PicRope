@@ -65,6 +65,24 @@ namespace ScreenLine.Tests
                 var image = Picture(30);
                 Check(ImageContent.HashPixels(image) == ImageContent.Decode(ImageContent.EncodeClipboard(image)).Fingerprint);
             });
+            Run("图片编码保留局部透明像素", delegate
+            {
+                byte[] pixels = { 20, 40, 60, 0, 30, 50, 70, 128, 40, 60, 80, 255, 50, 70, 90, 255 };
+                var image = BitmapSource.Create(2, 2, 96, 96, PixelFormats.Bgra32, null, pixels, 8);
+                Check(ImageContent.HashPixels(image) == ImageContent.Decode(ImageContent.EncodeClipboard(image)).Fingerprint);
+            });
+            Run("全零透明通道的 Windows 位图仍按不透明图片保存", delegate
+            {
+                byte[] pixels = { 20, 40, 60, 0, 30, 50, 70, 0 };
+                var image = BitmapSource.Create(2, 1, 96, 96, PixelFormats.Bgra32, null, pixels, 8);
+                byte[] encoded = ImageContent.EncodeClipboard(image);
+                using (var stream = new MemoryStream(encoded))
+                {
+                    var decoded = new FormatConvertedBitmap(BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0], PixelFormats.Bgra32, null, 0);
+                    var actual = new byte[8]; decoded.CopyPixels(actual, 8, 0);
+                    Check(actual[0] == 20 && actual[3] == 255 && actual[4] == 30 && actual[7] == 255);
+                }
+            });
             Run("同一次截图的两个来源只收一次", delegate
             {
                 var ledger = new CaptureReceipts();
@@ -276,6 +294,23 @@ namespace ScreenLine.Tests
                 restored.State.DisplayDevice = null;
                 restored.Save();
                 Check(new StateStore(store.Root).State.DisplayDevice == null);
+            });
+            Run("缩略图不保留原文件流，像素指纹保持兼容", delegate
+            {
+                var original = Picture(42);
+                var content = ImageContent.Decode(ImageContent.EncodeClipboard(original));
+                Check(!(content.Thumbnail is BitmapImage));
+                Check(content.Fingerprint == ImageContent.HashPixels(original));
+            });
+            Run("历史截图只读取尺寸，缩略图按需载入且缓存有界", delegate
+            {
+                var images = new System.Collections.Generic.List<ImageContent>();
+                var field = typeof(ImageContent).GetField("thumbnail", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                for (int i = 0; i < 80; i++) images.Add(ImageContent.Read(WritePicture("缓存" + i + ".png", (byte)i), false));
+                Check(images.All(image => field.GetValue(image) == null));
+                foreach (var image in images) Check(image.Thumbnail.IsFrozen && image.Thumbnail.PixelWidth == 8);
+                Check(images.Count(image => field.GetValue(image) != null) <= 64 && field.GetValue(images[0]) == null);
+                Check(images[0].Thumbnail.PixelHeight == 4);
             });
             Console.WriteLine("核心测试：{0} 通过，{1} 失败", passed, failed);
             Environment.ExitCode = failed == 0 ? 0 : 1;

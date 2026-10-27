@@ -6,6 +6,7 @@ namespace ScreenLine
     {
         readonly double frequency, decay;
         public double Position, Velocity, Target;
+        public bool Settled { get { return Position == Target && Velocity == 0; } }
 
         public SpringMotion(double response, double damping, double initial)
         {

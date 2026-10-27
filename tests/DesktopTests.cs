@@ -257,6 +257,7 @@ namespace ScreenLine.Tests
 
         static async Task CheckBasketAppearance(StateStore store)
         {
+            controller.TrayMenu.Pictures.IsChecked = true;
             var shelf = controller.Shelf;
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
             var count = (TextBlock)typeof(ShelfWindow).GetField("basketCount", flags).GetValue(shelf);
@@ -385,8 +386,13 @@ namespace ScreenLine.Tests
             var choice = basket.ChoiceFor(first.Path);
             Check(choice.ActualHeight < 200, "只有两张图片时卡片不会拉伸成整列的选中区域");
             Size size = choice.RenderSize;
+            Check(choice.Focus() && choice.IsKeyboardFocused, "缩略图可以接收键盘焦点");
             choice.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             basket.UpdateLayout();
+            var surface = (Border)choice.Template.FindName("Surface", choice);
+            var frame = (Border)((StackPanel)choice.Content).Children[0];
+            Check(((SolidColorBrush)surface.BorderBrush).Color.A == 0 && ((SolidColorBrush)frame.BorderBrush).Color == Color.FromRgb(36, 99, 174),
+                "选中图片同时获得焦点时只显示缩略图边框，时间标签外没有第二个框");
             Check(basket.SelectedCount == 1 && basket.HangButton.IsEnabled && AutomationProperties.GetItemStatus(basket.ChoiceFor(first.Path)) == "已选择",
                 "点击缩略图后勾选状态、已选数量与挂图按钮同步更新");
             Check(basket.ChoiceFor(first.Path) == choice, "选中后保留原卡片，连续点击和键盘焦点不会因重建丢失");
@@ -400,6 +406,13 @@ namespace ScreenLine.Tests
             Directory.CreateDirectory(Path.GetDirectoryName(preview)); using (var file = File.Create(preview)) encoder.Save(file);
             choice.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(basket.SelectedCount == 1 && AutomationProperties.GetItemStatus(choice) == "待挂", "再次点击原卡片可以取消选中");
+            Check(choice.IsKeyboardFocused && ((SolidColorBrush)frame.BorderBrush).Color == Color.FromRgb(110, 151, 203)
+                && ((SolidColorBrush)surface.BorderBrush).Color.A == 0, "取消选中后焦点提示仍只出现在缩略图边框");
+            var secondChoice = basket.ChoiceFor(second);
+            Check(secondChoice.Focus() && secondChoice.IsKeyboardFocused, "键盘焦点可以移到另一张图片");
+            Check(((SolidColorBrush)frame.BorderBrush).Color == Color.FromRgb(229, 234, 241)
+                && ((SolidColorBrush)((Border)((StackPanel)secondChoice.Content).Children[0]).BorderBrush).Color == Color.FromRgb(36, 99, 174),
+                "焦点离开后恢复普通边框，另一张已选图片保留选中边框");
             basket.AllTab.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             basket.PendingTab.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(basket.SelectedCount == 1 && AutomationProperties.GetItemStatus(basket.ChoiceFor(second)) == "已选择", "切换待挂和全部保留多选状态");
@@ -424,6 +437,7 @@ namespace ScreenLine.Tests
 
         static async Task CheckBasket(StateStore store, string watched)
         {
+            controller.TrayMenu.Pictures.IsChecked = true;
             Check(controller.Captures.AutoHang, "旧版自动挂图体验默认保留");
             await Task.Delay(600);
             controller.Shelf.UpdateLayout();
@@ -500,8 +514,9 @@ namespace ScreenLine.Tests
             controller.ShowBasket(); basket = controller.Basket;
             await ClickBasketControl(basket.ChoiceFor(owned));
             await ClickBasketControl(basket.ChoiceFor(tall));
-            await Until(() => ((BitmapSource)basket.Preview.Source).PixelHeight == 960);
-            Check(((BitmapSource)basket.Preview.Source).PixelWidth == 540 && basket.SelectedCount == 2, "长截图在右侧保持完整比例预览，多选状态保持正确");
+            await Until(() => basket.Preview.Source is BitmapSource && ((BitmapSource)basket.Preview.Source).PixelHeight > ((BitmapSource)basket.Preview.Source).PixelWidth);
+            var tallPreview = (BitmapSource)basket.Preview.Source;
+            Check(Math.Abs((double)tallPreview.PixelWidth / tallPreview.PixelHeight - 540.0 / 960) < 0.01 && basket.SelectedCount == 2, "长截图在右侧保持完整比例预览，多选状态保持正确");
             await Task.Delay(500);
             ExportBasketPreview(basket);
             Check(!File.Exists(Path.Combine(store.Root, "error.log")), "图片篓完整操作过程没有运行错误");
@@ -1128,6 +1143,7 @@ namespace ScreenLine.Tests
 
         static async Task CheckBasketMotion(StateStore store)
         {
+            controller.TrayMenu.Pictures.IsChecked = true;
             var shelf = controller.Shelf;
             shelf.ChoosingBasket = true; shelf.Width = 1000; shelf.Reveal(true, true, 60);
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
@@ -1785,7 +1801,9 @@ namespace ScreenLine.Tests
             Point bottomRight = trayMenu.PointToScreen(new Point(trayMenu.ActualWidth, trayMenu.ActualHeight));
             Check(topLeft.X >= screen.Bounds.Left && topLeft.Y >= screen.Bounds.Top
                 && bottomRight.X <= screen.Bounds.Right + 1 && bottomRight.Y <= screen.Bounds.Bottom + 1, "屏幕右下角的托盘菜单完整显示，没有超出屏幕");
-            Check(trayMenu.MoreMenu.Items.OfType<MenuItem>().Count(x => x.IsEnabled) == 5, "更多操作保留添加、文件夹、全部取下、开机启动和更新入口");
+            Check(trayMenu.MoreMenu.Items.OfType<MenuItem>().Count(x => x.IsEnabled) == 8
+                && trayMenu.MoreMenu.Items.OfType<MenuItem>().Any(item => item.Header as string == "区域截图")
+                && trayMenu.MoreMenu.Items.OfType<MenuItem>().Any(item => item.Header as string == "截图快捷键…"), "更多操作保留原入口并提供区域截图与快捷键设置");
             Check(trayMenu.ScreenButton.IsVisible && trayMenu.ScreenMode.Text == "跟随鼠标", "显示屏幕入口直接呈现当前模式");
             await ClickMenu(trayMenu.ScreenButton);
             await Until(() => trayMenu.ScreenMenu.IsOpen && trayMenu.ScreenMenu.ActualHeight > 0);

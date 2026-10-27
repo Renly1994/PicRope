@@ -12,7 +12,7 @@ namespace ScreenLine
         static readonly ResourceDictionary styles = (ResourceDictionary)XamlReader.Parse(@"
 <ResourceDictionary xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>
   <Style x:Key='Action' TargetType='Button'>
-    <Setter Property='FontFamily' Value='Segoe UI'/><Setter Property='FontSize' Value='13'/>
+    <Setter Property='FontFamily' Value='Microsoft YaHei UI'/><Setter Property='FontSize' Value='13'/>
     <Setter Property='Foreground' Value='#343D49'/><Setter Property='Background' Value='White'/>
     <Setter Property='BorderBrush' Value='#DCE2EA'/><Setter Property='BorderThickness' Value='1'/>
     <Setter Property='Padding' Value='14,0'/><Setter Property='Height' Value='34'/><Setter Property='MinWidth' Value='80'/>
@@ -33,7 +33,7 @@ namespace ScreenLine
     </ControlTemplate></Setter.Value></Setter>
   </Style>
   <Style x:Key='Hint' TargetType='ToolTip'>
-    <Setter Property='FontFamily' Value='Segoe UI'/><Setter Property='FontSize' Value='12'/><Setter Property='Foreground' Value='#536172'/>
+    <Setter Property='FontFamily' Value='Microsoft YaHei UI'/><Setter Property='FontSize' Value='12'/><Setter Property='Foreground' Value='#536172'/>
     <Setter Property='MaxWidth' Value='320'/><Setter Property='HasDropShadow' Value='False'/>
     <Setter Property='Template'><Setter.Value><ControlTemplate TargetType='ToolTip'>
       <Border Background='White' BorderBrush='#E0E4EA' BorderThickness='1' CornerRadius='7' Padding='10,7' Margin='8'>
@@ -47,7 +47,12 @@ namespace ScreenLine
         public static Style ButtonStyle { get { return (Style)styles["Action"]; } }
         public static Style HintStyle { get { return (Style)styles["Hint"]; } }
         public static SolidColorBrush Brush(string value) { return (SolidColorBrush)new BrushConverter().ConvertFromString(value); }
-        public static void Install(Application app) { app.Resources[typeof(ToolTip)] = styles["Hint"]; }
+        public static void Install(Application app)
+        {
+            // 小型透明挂件使用软件绘制，避免反复开关面板积累大块图形缓存。
+            RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
+            app.Resources[typeof(ToolTip)] = styles["Hint"];
+        }
 
         public static UIElement CloseIcon()
         {

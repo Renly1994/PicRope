@@ -91,7 +91,8 @@ namespace ScreenLine
             {
                 byte[] png = await Task.Run(() => ImageEditFiles.ReadPng(ImagePath));
                 if (closed) return;
-                var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(store.Root, "EditorCache"));
+                var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(store.Root, "EditorCache"),
+                    new CoreWebView2EnvironmentOptions("--disk-cache-size=8388608"));
                 if (closed) return;
                 await Browser.EnsureCoreWebView2Async(environment);
                 if (closed) return;
@@ -100,12 +101,22 @@ namespace ScreenLine
                 core.Settings.IsStatusBarEnabled = false;
                 core.Settings.IsZoomControlEnabled = false;
                 core.Settings.AreBrowserAcceleratorKeysEnabled = false;
-                core.SetVirtualHostNameToFolderMapping("screenline-editor.invalid", Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "editor"), CoreWebView2HostResourceAccessKind.DenyCors);
                 core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
                 core.WebResourceRequested += delegate(object source, CoreWebView2WebResourceRequestedEventArgs e)
                 {
-                    if (!e.Request.Uri.StartsWith(Origin, StringComparison.Ordinal))
-                        e.Response = environment.CreateWebResourceResponse(null, 403, "Forbidden", "");
+                    if (e.Request.Uri == Origin + "source.png")
+                    {
+                        e.Response = environment.CreateWebResourceResponse(new MemoryStream(png ?? ImageEditFiles.ReadPng(ImagePath)), 200, "OK", "Content-Type: image/png\r\nCache-Control: no-store");
+                        png = null; return;
+                    }
+                    string name = e.Request.Uri.StartsWith(Origin, StringComparison.Ordinal) ? e.Request.Uri.Substring(Origin.Length) : "";
+                    if (name == "index.html" || name == "editor.js" || name == "editor.css" || name == "translations.js" || name == "filerobot-image-editor.min.js")
+                    {
+                        string mime = name.EndsWith(".html") ? "text/html; charset=utf-8" : name.EndsWith(".css") ? "text/css" : "application/javascript";
+                        var file = new FileStream(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "editor", name), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                        e.Response = environment.CreateWebResourceResponse(file, 200, "OK", "Content-Type: " + mime); return;
+                    }
+                    e.Response = environment.CreateWebResourceResponse(null, 403, "Forbidden", "");
                 };
                 core.NavigationStarting += delegate(object source, CoreWebView2NavigationStartingEventArgs e) { e.Cancel = e.Uri != Origin + "index.html"; };
                 core.NewWindowRequested += delegate(object source, CoreWebView2NewWindowRequestedEventArgs e) { e.Handled = true; };
@@ -114,7 +125,7 @@ namespace ScreenLine
                 {
                     if (closed) return;
                     if (!e.IsSuccess) { ShowFailure(new IOException("图片编辑器页面加载失败。")); return; }
-                    await Browser.ExecuteScriptAsync("window.startEditor(" + json.Serialize(new { name = Path.GetFileName(ImagePath), source = "data:image/png;base64," + Convert.ToBase64String(png) }) + ");");
+                    await Browser.ExecuteScriptAsync("window.startEditor(" + json.Serialize(new { name = Path.GetFileName(ImagePath), source = Origin + "source.png" }) + ");");
                 };
                 failurePanel.Visibility = Visibility.Collapsed;
                 core.Navigate(Origin + "index.html");
@@ -158,6 +169,7 @@ namespace ScreenLine
                     using (var stream = new MemoryStream(png))
                         payload.SetImage(BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0]);
                     payload.SetData("PNG", new MemoryStream(png));
+                    payload.SetData(ClipboardRules.OwnFormat, "1");
                     await WindowsClipboard.Write(payload);
                     copied();
                     success = true;

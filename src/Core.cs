@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Media;
@@ -16,14 +18,17 @@ namespace ScreenLine
         public bool CollectClipboard { get; set; }
         public bool CollectTextClipboard { get; set; }
         public bool AutoHang { get; set; }
+        public bool HoverPreview { get; set; }
         public string Theme { get; set; }
         public string DisplayDevice { get; set; }
         public string LastUpdateNotification { get; set; }
+        public uint CaptureModifiers { get; set; }
+        public uint CaptureKey { get; set; }
         public List<string> Images { get; set; }
         public List<string> Collection { get; set; }
         public List<TextItem> Texts { get; set; }
 
-        public SavedState() { Images = new List<string>(); Collection = new List<string>(); Texts = new List<TextItem>(); Theme = "classic"; AutoHang = true; }
+        public SavedState() { Images = new List<string>(); Collection = new List<string>(); Texts = new List<TextItem>(); Theme = "classic"; AutoHang = true; HoverPreview = true; CaptureModifiers = 3; CaptureKey = (uint)'S'; }
     }
 
     internal sealed class StateStore
@@ -69,11 +74,19 @@ namespace ScreenLine
         }
     }
 
-    internal sealed class TextItem
+    internal sealed class TextItem : System.ComponentModel.INotifyPropertyChanged
     {
         public string Id { get; set; }
         public string Content { get; set; }
         public DateTime CreatedUtc { get; set; }
+        bool marked;
+        [System.Web.Script.Serialization.ScriptIgnore]
+        public bool IsMarked
+        {
+            get { return marked; }
+            set { if (marked == value) return; marked = value; if (PropertyChanged != null) PropertyChanged(this, new System.ComponentModel.PropertyChangedEventArgs("IsMarked")); }
+        }
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
     }
 
     internal sealed class TextCollection
@@ -118,6 +131,16 @@ namespace ScreenLine
             Items.RemoveAt(index);
             try { Store.Save(); }
             catch { Items.Insert(index, item); throw; }
+            if (Changed != null) Changed();
+        }
+
+        public void RemoveMany(IEnumerable<TextItem> selected)
+        {
+            var ids = new HashSet<string>(selected.Select(item => item.Id));
+            var previous = Items.ToArray();
+            if (Items.RemoveAll(item => ids.Contains(item.Id)) == 0) return;
+            try { Store.Save(); }
+            catch { Items.Clear(); Items.AddRange(previous); throw; }
             if (Changed != null) Changed();
         }
     }
@@ -165,61 +188,213 @@ namespace ScreenLine
 
     internal static class ClipboardRules
     {
+        public const string OwnFormat = "PicRope.OwnClipboard";
+        internal static readonly KeyValuePair<string, string>[] EncodedFormats = {
+            new KeyValuePair<string, string>("PNG", ".png"), new KeyValuePair<string, string>("image/png", ".png"),
+            new KeyValuePair<string, string>("image/jpeg", ".jpg"), new KeyValuePair<string, string>("image/jpg", ".jpg"), new KeyValuePair<string, string>("image/jpe", ".jpg"),
+            new KeyValuePair<string, string>("image/bmp", ".bmp"), new KeyValuePair<string, string>("image/gif", ".gif"),
+            new KeyValuePair<string, string>("image/tiff", ".tiff"), new KeyValuePair<string, string>("image/tif", ".tiff")
+        };
         static readonly string[] excluded = { "HTML Format", "UnicodeText", "Text", "System.String", "FileDrop", "Rich Text Format" };
+        static readonly TimeSpan htmlTimeout = TimeSpan.FromMilliseconds(200);
 
         public static bool IsPlainImage(IEnumerable<string> formats)
         {
             var values = new HashSet<string>(formats, StringComparer.OrdinalIgnoreCase);
-            return !values.Overlaps(excluded) && (values.Contains("PNG") || values.Contains("image/png")
-                || values.Contains("Bitmap") || values.Contains("DeviceIndependentBitmap"));
+            return !values.Overlaps(excluded) && HasImage(values);
         }
+
+        static bool HasImage(HashSet<string> formats)
+        {
+            return formats.Contains("Bitmap") || formats.Contains("DeviceIndependentBitmap") || formats.Contains("Format17")
+                || EncodedFormats.Any(format => formats.Contains(format.Key));
+        }
+
+        public static bool IsImage(IDataObject data) { return IsImage(data, null); }
+
+        public static bool IsImage(IDataObject data, string source)
+        {
+            string imageFile;
+            return IsImage(data, source, out imageFile);
+        }
+
+        public static bool IsImage(IDataObject data, string source, out string imageFile)
+        {
+            imageFile = null;
+            var formats = new HashSet<string>(data.GetFormats(), StringComparer.OrdinalIgnoreCase);
+            if (formats.Contains(OwnFormat)) return false;
+            if (IsPlainImage(formats)) return true;
+            if (formats.Contains("FileDrop"))
+            {
+                bool wechat = string.Equals(source, "Weixin", StringComparison.OrdinalIgnoreCase) || string.Equals(source, "WeChat", StringComparison.OrdinalIgnoreCase);
+                if (!wechat || !formats.Contains("image/png") || !formats.Contains("DeviceIndependentBitmap")
+                    || formats.Contains("HTML Format") || formats.Contains("Rich Text Format") || formats.Contains("UnicodeText") || formats.Contains("Text") || formats.Contains("System.String")) return false;
+                var files = data.GetData(DataFormats.FileDrop) as string[];
+                if (files == null || files.Length != 1 || !FileRules.IsImage(files[0])) return false;
+                imageFile = files[0]; return true;
+            }
+            if (formats.Contains("Rich Text Format") || !formats.Contains("HTML Format") || !HasImage(formats)) return false;
+            string html = data.GetData(DataFormats.Html) as string;
+            if (string.IsNullOrEmpty(html) || html.Length > 1024 * 1024) return false;
+            const string start = "<!--StartFragment-->", end = "<!--EndFragment-->";
+            int first = html.IndexOf(start, StringComparison.OrdinalIgnoreCase), last = html.IndexOf(end, StringComparison.OrdinalIgnoreCase);
+            if (first >= 0 || last >= 0)
+            {
+                if (first < 0 || last < first + start.Length) return false;
+                html = html.Substring(first + start.Length, last - first - start.Length);
+            }
+            else
+            {
+                int document = html.IndexOf("<html", StringComparison.OrdinalIgnoreCase);
+                if (document >= 0) html = html.Substring(document);
+            }
+            try
+            {
+                var options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+                html = Regex.Replace(html, @"<!--[\s\S]*?-->", "", options, htmlTimeout);
+                const string tail = @"(?:[^'"">]|""[^""]*""|'[^']*')*";
+                var images = Regex.Matches(html, @"<\s*img\b" + tail + @">", options, htmlTimeout);
+                if (images.Count != 1) return false;
+                string text = data.GetData(DataFormats.UnicodeText) as string ?? data.GetData(DataFormats.Text) as string ?? data.GetData("System.String") as string;
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    var imageSource = Regex.Match(images[0].Value, @"\ssrc\s*=\s*(?:""(?<url>[^""]*)""|'(?<url>[^']*)'|(?<url>[^\s>]+))", options, htmlTimeout);
+                    if (!imageSource.Success || !string.Equals(text.Trim(), WebUtility.HtmlDecode(imageSource.Groups["url"].Value), StringComparison.Ordinal)) return false;
+                }
+                html = html.Remove(images[0].Index, images[0].Length);
+                html = Regex.Replace(html, @"<\s*/?\s*(?:html|body|div|span|p|a|figure|br)\b" + tail + @">", "", options, htmlTimeout);
+                return string.IsNullOrWhiteSpace(WebUtility.HtmlDecode(html));
+            }
+            catch (RegexMatchTimeoutException) { return false; }
+        }
+
     }
 
     internal sealed class ImageContent
     {
-        public readonly BitmapSource Thumbnail;
+        static readonly LinkedList<ImageContent> cache = new LinkedList<ImageContent>();
+        BitmapSource thumbnail;
+        string backingPath;
+        LinkedListNode<ImageContent> cacheNode;
+        internal BitmapSource CachedThumbnail
+        {
+            get
+            {
+                if (!System.Threading.Monitor.TryEnter(cache)) return null;
+                try { if (thumbnail != null) Touch(); return thumbnail; }
+                finally { System.Threading.Monitor.Exit(cache); }
+            }
+        }
+        public BitmapSource Thumbnail
+        {
+            get
+            {
+                string path;
+                lock (cache)
+                {
+                    if (thumbnail != null) { Touch(); return thumbnail; }
+                    path = backingPath;
+                }
+                BitmapSource loaded;
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                    loaded = MakeThumbnail(stream, PixelWidth, PixelHeight);
+                lock (cache)
+                {
+                    if (thumbnail == null) thumbnail = loaded;
+                    Touch(); return thumbnail;
+                }
+            }
+        }
         public readonly string Fingerprint;
         public readonly int PixelWidth, PixelHeight;
 
         ImageContent(BitmapSource thumbnail, string fingerprint, int width, int height)
         {
-            Thumbnail = thumbnail;
+            this.thumbnail = thumbnail;
             Fingerprint = fingerprint;
             PixelWidth = width;
             PixelHeight = height;
         }
 
+        internal void BindFile(string path)
+        {
+            lock (cache) { backingPath = path; if (thumbnail != null) Touch(); }
+        }
+
+        internal ImageContent ForFile(string path)
+        {
+            lock (cache)
+            {
+                var image = backingPath != null && !FileRules.SameFile(backingPath, path)
+                    ? new ImageContent(thumbnail, Fingerprint, PixelWidth, PixelHeight) : this;
+                image.BindFile(path); return image;
+            }
+        }
+
+        void Touch()
+        {
+            if (backingPath == null) return;
+            if (cacheNode != null) cache.Remove(cacheNode);
+            cacheNode = cache.AddLast(this);
+            while (cache.Count > 64)
+            {
+                var evicted = cache.First.Value; cache.RemoveFirst();
+                evicted.cacheNode = null; evicted.thumbnail = null;
+            }
+        }
+
         public static ImageContent Read(string path)
+        {
+            return Read(path, true);
+        }
+
+        public static ImageContent Read(string path, bool fingerprint)
         {
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
             {
                 if (stream.Length == 0 || stream.Length > 64L * 1024 * 1024) throw new InvalidDataException("Image file size is invalid");
+                if (!fingerprint)
+                {
+                    var frame = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None).Frames[0];
+                    if (frame.PixelWidth <= 0 || frame.PixelHeight <= 0 || (long)frame.PixelWidth * frame.PixelHeight > 80000000) throw new InvalidDataException("Image dimensions are invalid");
+                    var metadata = new ImageContent(null, null, frame.PixelWidth, frame.PixelHeight); metadata.BindFile(path); return metadata;
+                }
                 using (var memory = new MemoryStream())
                 {
                     stream.CopyTo(memory);
-                    return Decode(memory.ToArray());
+                    var image = Decode(memory.ToArray(), fingerprint); image.BindFile(path); return image;
                 }
             }
         }
 
         public static ImageContent Decode(byte[] bytes)
         {
+            return Decode(bytes, true);
+        }
+
+        static ImageContent Decode(byte[] bytes, bool fingerprint)
+        {
             using (var memory = new MemoryStream(bytes))
             {
-                var full = BitmapDecoder.Create(memory, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
+                var full = BitmapDecoder.Create(memory, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None).Frames[0];
                 if (full.PixelWidth <= 0 || full.PixelHeight <= 0 || (long)full.PixelWidth * full.PixelHeight > 80000000)
                     throw new InvalidDataException("Image dimensions are invalid");
-                string fingerprint = HashPixels(full);
-                var thumbnail = new BitmapImage();
-                thumbnail.BeginInit();
-                thumbnail.CacheOption = BitmapCacheOption.OnLoad;
-                thumbnail.StreamSource = new MemoryStream(bytes);
-                if (full.PixelWidth >= full.PixelHeight) thumbnail.DecodePixelWidth = Math.Min(240, full.PixelWidth);
-                else thumbnail.DecodePixelHeight = Math.Min(240, full.PixelHeight);
-                thumbnail.EndInit();
-                thumbnail.Freeze();
-                return new ImageContent(thumbnail, fingerprint, full.PixelWidth, full.PixelHeight);
+                string hash = fingerprint ? HashPixels(full) : null;
+                memory.Position = 0;
+                return new ImageContent(MakeThumbnail(memory, full.PixelWidth, full.PixelHeight), hash, full.PixelWidth, full.PixelHeight);
             }
+        }
+
+        static BitmapSource MakeThumbnail(Stream stream, int width, int height)
+        {
+            var image = new BitmapImage(); image.BeginInit(); image.CacheOption = BitmapCacheOption.OnLoad; image.StreamSource = stream;
+            if (width >= height) image.DecodePixelWidth = Math.Min(240, width); else image.DecodePixelHeight = Math.Min(240, height);
+            image.EndInit();
+            var color = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0);
+            int stride = color.PixelWidth * 4; byte[] pixels = new byte[stride * color.PixelHeight];
+            color.CopyPixels(pixels, stride, 0);
+            var detached = BitmapSource.Create(color.PixelWidth, color.PixelHeight, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
+            detached.Freeze(); return detached;
         }
 
         public static byte[] EncodeClipboard(BitmapSource image)
@@ -227,13 +402,19 @@ namespace ScreenLine
             // 部分 Windows 位图的透明通道全为零，截图应按不透明图像保存。
             var converted = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0);
             int stride = converted.PixelWidth * 4;
-            byte[] pixels = new byte[stride * converted.PixelHeight];
-            converted.CopyPixels(pixels, stride, 0);
+            byte[] rows = new byte[stride * Math.Min(32, converted.PixelHeight)];
             bool emptyAlpha = true;
-            for (int i = 3; i < pixels.Length; i += 4)
-                if (pixels[i] != 0) { emptyAlpha = false; break; }
+            for (int y = 0; y < converted.PixelHeight && emptyAlpha; y += 32)
+            {
+                int height = Math.Min(32, converted.PixelHeight - y);
+                converted.CopyPixels(new Int32Rect(0, y, converted.PixelWidth, height), rows, stride, 0);
+                for (int i = 3; i < stride * height; i += 4)
+                    if (rows[i] != 0) { emptyAlpha = false; break; }
+            }
             if (emptyAlpha)
             {
+                byte[] pixels = new byte[stride * converted.PixelHeight];
+                converted.CopyPixels(pixels, stride, 0);
                 for (int i = 3; i < pixels.Length; i += 4) pixels[i] = 255;
                 image = BitmapSource.Create(converted.PixelWidth, converted.PixelHeight, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
             }
@@ -246,11 +427,22 @@ namespace ScreenLine
         {
             var color = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0);
             int stride = color.PixelWidth * 4;
-            byte[] pixels = new byte[stride * color.PixelHeight + 8];
-            BitConverter.GetBytes(color.PixelWidth).CopyTo(pixels, 0);
-            BitConverter.GetBytes(color.PixelHeight).CopyTo(pixels, 4);
-            color.CopyPixels(pixels, stride, 8);
-            using (var sha = SHA256.Create()) return Convert.ToBase64String(sha.ComputeHash(pixels));
+            byte[] header = new byte[8];
+            BitConverter.GetBytes(color.PixelWidth).CopyTo(header, 0);
+            BitConverter.GetBytes(color.PixelHeight).CopyTo(header, 4);
+            byte[] pixels = new byte[stride * Math.Min(32, color.PixelHeight)];
+            using (var sha = SHA256.Create())
+            {
+                sha.TransformBlock(header, 0, header.Length, header, 0);
+                for (int y = 0; y < color.PixelHeight; y += 32)
+                {
+                    int height = Math.Min(32, color.PixelHeight - y);
+                    color.CopyPixels(new Int32Rect(0, y, color.PixelWidth, height), pixels, stride, 0);
+                    sha.TransformBlock(pixels, 0, stride * height, pixels, 0);
+                }
+                sha.TransformFinalBlock(new byte[0], 0, 0);
+                return Convert.ToBase64String(sha.Hash);
+            }
         }
     }
 
@@ -288,7 +480,7 @@ namespace ScreenLine
         public CaptureItem(string path, ImageContent image)
         {
             Path = System.IO.Path.GetFullPath(path);
-            Image = image;
+            Image = image.ForFile(Path);
             Written = File.GetLastWriteTimeUtc(Path);
         }
     }
@@ -320,7 +512,7 @@ namespace ScreenLine
             if (Contains(path)) return;
             var item = Collected.FirstOrDefault(i => FileRules.SameFile(i.Path, path));
             if (item == null) { item = new CaptureItem(path, image); Collected.Add(item); }
-            else if (item.Image != image) { item.Image = image; item.Written = File.GetLastWriteTimeUtc(path); }
+            else if (item.Image != image) { item.Image = image.ForFile(path); item.Written = File.GetLastWriteTimeUtc(path); }
             Items.Add(item);
             if (Items.Count > 50) Items.RemoveAt(0);
             Save();

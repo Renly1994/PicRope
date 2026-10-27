@@ -52,17 +52,17 @@ namespace ScreenLine.Tests
             {
                 var parameters = new CompilerParameters { GenerateExecutable = true, OutputAssembly = fixture, CompilerOptions = "/target:winexe" };
                 var result = compiler.CompileAssemblyFromSource(parameters,
-                    "[assembly:System.Reflection.AssemblyInformationalVersion(\"1.2.0\")] class Fixture { static void Main() { System.IO.File.WriteAllText(System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, \"started.txt\"), \"ok\"); } }");
+                    "[assembly:System.Reflection.AssemblyInformationalVersion(\"1.3.0\")] class Fixture { static void Main() { System.IO.File.WriteAllText(System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, \"started.txt\"), \"ok\"); } }");
                 if (result.Errors.HasErrors) throw new Exception(result.Errors[0].ToString());
             }
             package = MakePackage(fixture, null);
-            data = new AppUpdates.ReleaseData { tag_name = "v1.2.0", body = "改进图片篮子\n修复截图选择问题", assets = new[] {
-                new AppUpdates.AssetData { name = "PicRope-1.2.0-source.zip" },
-                new AppUpdates.AssetData { name = "PicRope-1.2.0-windows-x64.zip", size = package.Length,
-                    browser_download_url = AppUpdates.Repository + "/releases/download/v1.2.0/PicRope-1.2.0-windows-x64.zip", digest = Digest(package) }
+            data = new AppUpdates.ReleaseData { tag_name = "v1.3.0", body = "改进图片篮子\n修复截图选择问题", assets = new[] {
+                new AppUpdates.AssetData { name = "PicRope-1.3.0-source.zip" },
+                new AppUpdates.AssetData { name = "PicRope-1.3.0-windows-x64.zip", size = package.Length,
+                    browser_download_url = AppUpdates.Repository + "/releases/download/v1.3.0/PicRope-1.3.0-windows-x64.zip", digest = Digest(package) }
             } };
-            Check(Parse().Version == "1.2.0" && Parse().DownloadUrl.EndsWith("windows-x64.zip"), "只选择较新的 Windows x64 安装包，不误取源码包");
-            Check(AppUpdates.Parse(json.Serialize(data), "1.2.0") == null && AppUpdates.Parse(json.Serialize(data), "1.3.0") == null, "同版与旧版不会提示升级或降级");
+            Check(Parse().Version == "1.3.0" && Parse().DownloadUrl.EndsWith("windows-x64.zip"), "只选择较新的 Windows x64 安装包，不误取源码包");
+            Check(AppUpdates.Parse(json.Serialize(data), "1.3.0") == null && AppUpdates.Parse(json.Serialize(data), "1.4.0") == null, "同版与旧版不会提示升级或降级");
             data.prerelease = true; Check(Parse() == null, "预发布版本不参与自动更新"); data.prerelease = false;
             data.draft = true; Check(Parse() == null, "草稿版本不参与更新"); data.draft = false;
             var asset = data.assets[1]; string original = asset.digest; asset.digest = null;
@@ -74,7 +74,7 @@ namespace ScreenLine.Tests
             var handler = new Handler(package, json.Serialize(data));
             using (var updates = new AppUpdates(handler))
             {
-                Check((await updates.CheckAsync(CancellationToken.None)).Version == "1.2.0", "检查更新能读取服务返回的新版本");
+                Check((await updates.CheckAsync(CancellationToken.None)).Version == "1.3.0", "检查更新能读取服务返回的新版本");
                 string work = await updates.DownloadAsync(release, new Progress<int>(), CancellationToken.None);
                 Check(File.Exists(Path.Combine(work, "contents", "app", "PicRope.exe")), "下载、大小校验、SHA256 校验及解压完整通过");
                 string target = Path.Combine(root, "installed"); Directory.CreateDirectory(Path.Combine(target, "data", "Captures"));
@@ -108,9 +108,9 @@ namespace ScreenLine.Tests
             }
             string archive = Path.Combine(root, "invalid.zip");
             File.WriteAllBytes(archive, MakePackage(fixture, "../escape.txt"));
-            Reject(delegate { AppUpdates.Extract(archive, Path.Combine(root, "extract"), "1.2.0"); }, "拒绝 ZIP 路径穿越");
+            Reject(delegate { AppUpdates.Extract(archive, Path.Combine(root, "extract"), "1.3.0"); }, "拒绝 ZIP 路径穿越");
             File.WriteAllBytes(archive, MakePackage(fixture, "app/data/state.json"));
-            Reject(delegate { AppUpdates.Extract(archive, Path.Combine(root, "extract-data"), "1.2.0"); }, "拒绝包含用户数据目录的更新包");
+            Reject(delegate { AppUpdates.Extract(archive, Path.Combine(root, "extract-data"), "1.3.0"); }, "拒绝包含用户数据目录的更新包");
             File.WriteAllBytes(archive, package);
             Reject(delegate { AppUpdates.Extract(archive, Path.Combine(root, "wrong-version"), "9.0.0"); }, "安装前校验程序实际版本与发布版本一致");
             using (var canceled = new CancellationTokenSource())

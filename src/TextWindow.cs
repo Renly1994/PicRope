@@ -30,14 +30,9 @@ namespace ScreenLine
         {
             BitmapSource image;
             if (images.TryGetValue(theme.Id, out image)) return image;
-            using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("PicRope.Envelope." + theme.Id))
-            {
-                var bitmap = new BitmapImage();
-                bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad; bitmap.StreamSource = stream; bitmap.EndInit();
-                image = new CroppedBitmap(bitmap, bounds[Array.IndexOf(LineTheme.All, theme)]);
-                image.Freeze(); images.Add(theme.Id, image);
-                return image;
-            }
+            image = SkinImages.Crop("PicRope.Envelope." + theme.Id, bounds[Array.IndexOf(LineTheme.All, theme)]);
+            images.Add(theme.Id, image);
+            return image;
         }
     }
 
@@ -63,6 +58,9 @@ namespace ScreenLine
         readonly DispatcherTimer feedbackTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         internal readonly TextBox Search = new TextBox();
         internal readonly ListBox List = new ListBox();
+        internal readonly Button SelectAllButton, DeleteSelectedButton;
+        bool refreshing, confirming;
+        string checkedSignature;
         internal int VisibleCount { get { return List.Items.Count; } }
         internal string Feedback { get { return feedback.Text; } }
         bool closed;
@@ -70,6 +68,7 @@ namespace ScreenLine
         public TextWindow(TextCollection texts, ShelfWindow shelf)
         {
             this.texts = texts; this.shelf = shelf;
+            foreach (var item in texts.Items) item.IsMarked = false;
             Title = "文字 · 图绳"; Owner = shelf;
             Width = 460; Height = 456;
             WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize;
@@ -85,12 +84,13 @@ namespace ScreenLine
             body.RowDefinitions.Add(new RowDefinition { Height = new GridLength(52) });
             body.RowDefinitions.Add(new RowDefinition { Height = new GridLength(48) });
             body.RowDefinitions.Add(new RowDefinition());
+            body.RowDefinitions.Add(new RowDefinition { Height = new GridLength(48) });
             var card = LightTheme.Card(body); card.Margin = new Thickness(16, 11, 16, 16); card.Padding = new Thickness(0); card.CornerRadius = new CornerRadius(12);
             root.Children.Add(card); root.Children.Add(pointer);
 
             var header = new Grid { Margin = new Thickness(18, 0, 14, 0) };
             var heading = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            heading.Children.Add(new TextBlock { Text = "文字", FontSize = 18, FontWeight = FontWeights.SemiBold, Foreground = LightTheme.Brush("#283343") });
+            heading.Children.Add(new TextBlock { Text = "文字", FontSize = 18, FontWeight = FontWeights.Bold, Foreground = LightTheme.Brush("#283343") });
             count.FontSize = 12; count.Foreground = LightTheme.Brush("#536172");
             heading.Children.Add(new Border { Child = count, Background = LightTheme.Brush("#F0F3F7"), CornerRadius = new CornerRadius(8), Padding = new Thickness(6, 1, 6, 1), Margin = new Thickness(8, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center });
             heading.Children.Add(feedback); header.Children.Add(heading);
@@ -105,10 +105,11 @@ namespace ScreenLine
             searchPanel.Children.Add(new Border { CornerRadius = new CornerRadius(7), BorderBrush = LightTheme.Brush("#DCE2EA"), BorderThickness = new Thickness(1), Child = Search });
             var placeholder = new TextBlock { Text = "搜索文字", IsHitTestVisible = false, Margin = new Thickness(11, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, FontSize = 13, Foreground = LightTheme.Brush("#8390A1") };
             searchPanel.Children.Add(placeholder);
-            Search.TextChanged += delegate { placeholder.Visibility = Search.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed; Refresh(); };
+            Search.TextChanged += delegate { confirming = false; placeholder.Visibility = Search.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed; Refresh(); };
             Grid.SetRow(searchPanel, 1); body.Children.Add(searchPanel);
 
             List.BorderThickness = new Thickness(0); List.Background = Brushes.Transparent; List.Margin = new Thickness(10, 0, 10, 10);
+            List.FontFamily = FontFamily; List.FontSize = 14;
             List.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
             List.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
             List.SetValue(ScrollViewer.CanContentScrollProperty, true);
@@ -127,7 +128,23 @@ namespace ScreenLine
                 <MultiTrigger><MultiTrigger.Conditions><Condition Property='Tag' Value='delete'/><Condition Property='IsMouseOver' Value='True'/></MultiTrigger.Conditions><Setter Property='Foreground' Value='#B74E4A'/><Setter TargetName='Surface' Property='Background' Value='#FFF0ED'/></MultiTrigger>
                 </ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style></DataTemplate.Resources>
               <Border BorderBrush='#EDF0F4' BorderThickness='0,0,0,1' Padding='12,10,8,10'><Grid><Grid.ColumnDefinitions><ColumnDefinition Width='*'/><ColumnDefinition Width='64'/></Grid.ColumnDefinitions>
-                <StackPanel Margin='0,0,8,0'>
+                <CheckBox IsChecked='{Binding IsMarked, Mode=TwoWay}' Tag='select' AutomationProperties.Name='选择文字' Width='22' Height='22' HorizontalAlignment='Left' VerticalAlignment='Top' Cursor='Hand'>
+                  <CheckBox.Template><ControlTemplate TargetType='CheckBox'>
+                    <Border Background='Transparent'>
+                      <Border x:Name='Mark' Width='18' Height='18' CornerRadius='9' Background='White' BorderBrush='#8BA4C4' BorderThickness='1' Opacity='0' HorizontalAlignment='Center' VerticalAlignment='Center'>
+                        <Path x:Name='Tick' Width='10' Height='7' Data='M0,3 L3,6 L9,0' Stroke='White' StrokeThickness='1.6' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round' HorizontalAlignment='Center' VerticalAlignment='Center' Visibility='Collapsed'/>
+                      </Border>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <DataTrigger Binding='{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}' Value='True'><Setter TargetName='Mark' Property='Opacity' Value='1'/></DataTrigger>
+                      <DataTrigger Binding='{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}' Value='True'><Setter TargetName='Mark' Property='Opacity' Value='1'/></DataTrigger>
+                      <Trigger Property='IsKeyboardFocused' Value='True'><Setter TargetName='Mark' Property='Opacity' Value='1'/></Trigger>
+                      <Trigger Property='IsChecked' Value='True'><Setter TargetName='Mark' Property='Opacity' Value='1'/><Setter TargetName='Mark' Property='Background' Value='#2463AE'/><Setter TargetName='Mark' Property='BorderBrush' Value='#2463AE'/><Setter TargetName='Tick' Property='Visibility' Value='Visible'/></Trigger>
+                      <Trigger Property='IsEnabled' Value='False'><Setter Property='Opacity' Value='0.4'/></Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate></CheckBox.Template>
+                </CheckBox>
+                <StackPanel Margin='28,0,8,0'>
                   <Grid><TextBlock x:Name='Preview' Text='{Binding Content}' TextWrapping='Wrap' TextTrimming='CharacterEllipsis' MaxHeight='44' LineHeight='22' Foreground='#283343'/>
                   <TextBox x:Name='FullText' Text='{Binding Content, Mode=OneWay}' IsReadOnly='True' TextWrapping='Wrap' MaxHeight='220' VerticalScrollBarVisibility='Auto' BorderThickness='0' Padding='0' Background='Transparent' Foreground='#283343' Visibility='Collapsed'/></Grid>
                   <TextBlock Text='{Binding CreatedUtc, Converter={StaticResource TextTime}}' FontSize='11' Foreground='#8390A1' Margin='0,5,0,0'/>
@@ -142,8 +159,16 @@ namespace ScreenLine
                 .Replace("__COPY__", LightMenu.IconGeometry("copy").ToString(CultureInfo.InvariantCulture))
                 .Replace("__TRASH__", LightMenu.IconGeometry("trash").ToString(CultureInfo.InvariantCulture)));
             List.AddHandler(Button.ClickEvent, new RoutedEventHandler(RowAction));
+            List.AddHandler(System.Windows.Controls.Primitives.ToggleButton.CheckedEvent, new RoutedEventHandler(SelectionChanged));
+            List.AddHandler(System.Windows.Controls.Primitives.ToggleButton.UncheckedEvent, new RoutedEventHandler(SelectionChanged));
             var listPanel = new Grid(); listPanel.Children.Add(List); listPanel.Children.Add(empty);
             Grid.SetRow(listPanel, 2); body.Children.Add(listPanel);
+            var batch = new Grid { Margin = new Thickness(18, 0, 18, 6) };
+            SelectAllButton = LightTheme.Button("全选", SelectAll, "quiet"); SelectAllButton.HorizontalAlignment = HorizontalAlignment.Left;
+            DeleteSelectedButton = LightTheme.Button("删除所选", DeleteSelected, "quiet");
+            DeleteSelectedButton.HorizontalAlignment = HorizontalAlignment.Right; DeleteSelectedButton.Foreground = LightTheme.Brush("#B74E4A");
+            SelectAllButton.FontSize = DeleteSelectedButton.FontSize = 14;
+            batch.Children.Add(SelectAllButton); batch.Children.Add(DeleteSelectedButton); Grid.SetRow(batch, 3); body.Children.Add(batch);
 
             feedbackTimer.Tick += delegate { feedback.Text = ""; feedbackTimer.Stop(); };
             SourceInitialized += delegate { Position(); };
@@ -178,7 +203,11 @@ namespace ScreenLine
             var scroll = FindScroll(List);
             double offset = scroll == null ? 0 : scroll.VerticalOffset;
             string query = Search.Text.Trim();
-            List.ItemsSource = texts.Items.Where(item => item.Content.IndexOf(query, StringComparison.CurrentCultureIgnoreCase) >= 0).ToArray();
+            refreshing = true;
+            var visible = texts.Items.Where(item => item.Content.IndexOf(query, StringComparison.CurrentCultureIgnoreCase) >= 0).ToArray();
+            foreach (var item in texts.Items.Except(visible)) item.IsMarked = false;
+            List.ItemsSource = visible;
+            refreshing = false; UpdateBatch();
             List.SelectedItem = selected;
             count.Text = texts.Items.Count.ToString();
             empty.Text = texts.Items.Count == 0 ? texts.CollectClipboard
@@ -186,6 +215,38 @@ namespace ScreenLine
                 : "尚未开启文字收集\n在托盘「剪贴板收集」中开启「文字」" : "没有找到匹配的文字";
             empty.Visibility = List.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             if (scroll != null) scroll.ScrollToVerticalOffset(offset);
+        }
+
+        void SelectionChanged(object sender, RoutedEventArgs e) { if (!refreshing) UpdateBatch(); }
+
+        void UpdateBatch()
+        {
+            var items = List.Items.Cast<TextItem>().ToArray();
+            int selected = items.Count(item => item.IsMarked);
+            string signature = string.Join("|", items.Where(item => item.IsMarked).Select(item => item.Id).OrderBy(id => id));
+            if (signature != checkedSignature) confirming = false;
+            checkedSignature = signature;
+            SelectAllButton.IsEnabled = items.Length > 0;
+            SelectAllButton.Content = selected == items.Length && selected > 0 ? "取消全选" : "全选";
+            DeleteSelectedButton.IsEnabled = selected > 0;
+            DeleteSelectedButton.Content = confirming ? "确认删除 " + selected + " 条" : selected == 0 ? "删除所选" : "删除所选（" + selected + "）";
+        }
+
+        void SelectAll()
+        {
+            var items = List.Items.Cast<TextItem>().ToArray();
+            bool mark = !items.All(item => item.IsMarked);
+            refreshing = true; foreach (var item in items) item.IsMarked = mark; refreshing = false;
+            UpdateBatch();
+        }
+
+        void DeleteSelected()
+        {
+            var items = List.Items.Cast<TextItem>().Where(item => item.IsMarked).ToArray();
+            if (items.Length == 0) return;
+            if (!confirming) { confirming = true; DeleteSelectedButton.Content = "确认删除 " + items.Length + " 条"; return; }
+            try { texts.RemoveMany(items); ShowFeedback("已删除 " + items.Length + " 条"); }
+            catch (Exception error) { texts.Store.Log(error); ShowFeedback("删除未完成，请重试"); UpdateBatch(); }
         }
 
         static ScrollViewer FindScroll(DependencyObject value)
