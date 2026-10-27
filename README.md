@@ -1,77 +1,172 @@
 <p align="center">
-  <img src="src/assets/PicRope.png" width="104" height="104" alt="图绳 Logo">
+  <img src="src/assets/PicRope.png" width="76" height="76" alt="图绳 Logo">
 </p>
 
 <h1 align="center">PicRope · 图绳</h1>
 
-<p align="center"><strong>把截图挂起来，随手取用。</strong></p>
-
-<p align="center">Windows 10/11 · 免费开源 · 中文界面 · 图片本地处理</p>
+<p align="center">Windows 截图暂存与桌面贴图工具</p>
 
 <p align="center">
-  <a href="https://github.com/Renly1994/PicRope/releases/latest">下载 Windows 版</a>
-  · <a href="#开始使用">开始使用</a>
-  · <a href="https://github.com/Renly1994/PicRope/issues">反馈问题</a>
+  <a href="https://github.com/Renly1994/PicRope/releases/latest"><img src="https://img.shields.io/github/v/release/Renly1994/PicRope?style=flat-square&amp;label=release&amp;color=2563eb" alt="最新版本"></a>
+  <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078d4?style=flat-square" alt="Windows 10 和 11">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-475569?style=flat-square" alt="MIT 许可"></a>
 </p>
 
-![图绳产品插画：木夹把图片挂在绳上，参考图用图钉固定](docs/assets/picrope-banner.png)
+<p align="center">
+  <a href="https://github.com/Renly1994/PicRope/releases/latest"><strong>下载 Windows 版</strong></a>
+  · <a href="#功能">功能</a>
+  · <a href="#开始使用">开始使用</a>
+  · <a href="#常见问题">常见问题</a>
+  · <a href="https://github.com/Renly1994/PicRope/issues">反馈</a>
+</p>
 
-刚截的图，下一秒就要用。图绳把截图挂在屏幕上沿，单击复制，拖拽取用；需要反复对照的图片，还能钉在桌面上。
+![图绳界面拼图：屏幕上沿的截图绳、文字信封、图片篮子与桌面贴图，图片内容为示例](docs/assets/overview-windows.png)
 
-写文档、做教程、整理参考图时，把图片留在手边。鼠标移到屏幕上沿就能展开绳子，离开后自动收起，全屏时也会收起。
+PicRope 将截图暂存在屏幕上沿，单击复制、拖拽取用，也可以取下图片，钉在桌面上对照。鼠标移到顶部展开，离开后自动收起，适合写文档、做教程和整理参考图。
 
-## 截图留在手边
+## 功能
 
-![图绳实际界面：屏幕上沿挂着工作流程、临时笔记和界面参考三张示例图片](docs/assets/rope-preview.png)
-
-- 截图自动挂上绳子，需要时直接复制或拖到目标应用，也能手动添加已有图片。
-- 截图先收进「图片篮子」。关闭「自动挂上新截图」后，点绳子右端的篮子，左侧多选截图、右侧查看大图，再统一挂上绳子。
-- 篮子左侧的信封收存常用文字，支持搜索、复制和删除，五套外观同步适配。
-- 把参考图取下，钉成置顶桌面贴图，一边看图一边做；拖动调整位置，滚轮缩放。
-- 长按图片即可编辑，画框、加箭头、写文字，或裁剪、旋转后保存。编辑过程在本机完成。
-- 图片会轻轻摆动，滚轮可以浏览更多截图。托盘里可切换外观，按习惯开启剪贴板收集和开机启动。
+- **截图收集** — 自动收集 Windows 截图文件夹中的新图片，支持剪贴板图片与手动导入。
+- **复制与拖拽** — 单击复制图片，拖入聊天框、文档等目标应用；滚轮浏览更多挂图。
+- **桌面贴图** — 将图片固定置顶，拖动调整位置，滚轮缩放，点击图钉可重新挂回。
+- **图片篮子** — 保存暂时不用的截图，支持多选、大图预览与批量挂图。
+- **文字信封** — 收集剪贴板文字，支持搜索、查看全文与复制，保留原文换行和缩进。
+- **本地编辑** — 直接标注、添加文字、裁剪和旋转，图片处理在本机完成。
+- **桌面适配** — 五套外观、多显示器选择、顶部自动收起，支持开机启动和应用内更新。
 
 ## 开始使用
 
-1. [下载最新版安装包](https://github.com/Renly1994/PicRope/releases/latest)，完整解压后双击 `Install.cmd`。
-2. 启动后，用 `Win+PrtScn` 截图。保存到 Windows 截图文件夹的新图片会自动挂上。
-3. 如果常用 `Win+Shift+S`、`PrtScn` 或微信 `Alt+A`，右键托盘图标，在「剪贴板收集」中开启「图片」。这个选项默认关闭。
+1. 从 [Releases 下载最新版](https://github.com/Renly1994/PicRope/releases/latest)，完整解压后运行 `Install.cmd`。
+2. 启动图绳，用 `Win+PrtScn` 截图。保存到 Windows 截图文件夹的新图片会自动挂上。
+3. 将鼠标移到屏幕上沿展开绳子，单击图片复制，或拖拽到需要的应用。
 
-支持 Windows 10/11 64 位，需要 .NET Framework 4.8 和 Microsoft Edge WebView2 Runtime。编辑器提示缺少运行时时，可从 [微软官网](https://developer.microsoft.com/microsoft-edge/webview2/) 安装 WebView2。
+**系统要求：** Windows 10 / 11 64 位、.NET Framework 4.8；内置编辑器需要 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。
 
-## 常用操作
+> 使用 `Win+Shift+S`、`PrtScn` 或微信 `Alt+A` 时，在托盘右键菜单 →「剪贴板收集」中开启「图片」。图片与文字的剪贴板收集独立控制，默认都关闭。
 
-| 想做什么 | 操作 |
+<details>
+<summary>快捷键与常用操作</summary>
+
+| 操作 | 方式 |
 | --- | --- |
-| 展开、收起绳子 | 鼠标移到屏幕上沿、点击托盘图标，或按 `Ctrl+Alt+T` |
-| 选择显示屏幕 | 右键托盘图标 →「显示屏幕」，选择「跟随鼠标」或固定到指定屏幕；拔掉固定屏幕时临时回到主屏，重连后恢复 |
-| 从历史截图中挑选挂图 | 点击绳子右端的「图片篮子」，或托盘右键「图片篮子」；多选后点击「挂上绳子」 |
-| 复制图片 | 单击图片，同时复制图片与文件 |
-| 收集与取用文字 | 右键托盘图标，在「剪贴板收集」中开启「文字」，之后复制的文字自动进入信封；点击「文字信封」或篮子左侧的信封，可搜索、复制和删除，选中记录查看全文 |
-| 把图放进其他应用 | 拖拽图片；效果由目标应用决定 |
-| 打开或编辑 | 双击用默认图片应用打开；长按或右键「编辑」进入编辑器 |
-| 钉在桌面上 | 单击夹子取下图片；单击贴图上沿的图钉，重新挂回绳子 |
-| 保存一份副本 | 右键「保存副本」，选择保存位置 |
-| 放回图片篮子 | 图片右键「取下放篮子」；托盘「更多操作」中的「全部取下」保留所有原文件 |
-| 删除图片 | 点击绳子图片左上角的 ×，或在图片篮子中勾选后点击「删除所选」，文件移到回收站 |
-| 检查更新 | 托盘右键「更多操作」→「检查更新」，发现新版本后点击「下载并安装」 |
+| 显示 / 收起 | `Ctrl+Alt+T`，或单击托盘图标 |
+| 打开图片 | 双击图片，使用系统默认图片应用 |
+| 编辑图片 | 长按图片，或图片右键 →「编辑」 |
+| 桌面贴图 | 单击夹子取下；单击图钉挂回 |
+| 放回篮子 | 图片右键 →「取下放篮子」 |
+| 保存副本 | 图片右键 →「保存副本」 |
+| 选择显示屏幕 | 托盘右键 →「显示屏幕」，跟随鼠标或固定到指定屏幕 |
+| 更换外观 | 托盘右键 →「外观」 |
+| 开机启动 / 检查更新 | 托盘右键 →「更多操作」 |
 
-右键「取下放篮子」会从绳子取下图片，保留在本地和图片篮子中，需要时可以再次挂上。左上角 ×、右键「移到回收站」和篮子里的「删除所选」会删除图片文件，并同步移除挂图和篮子记录，可从系统回收站恢复。拖拽移动完成后，图片会自动取下。
+拖拽效果由目标应用决定。拖拽移动完成后，图片自动从绳子取下。固定屏幕断开时暂用主屏，重连后恢复原来的选择。
 
-1.1.0 起支持应用内更新。启动后和运行期间会自动检查新版本，通过系统通知提醒；也可从托盘手动检查。下载经过大小、SHA256 和程序版本校验后安装并重启，保留图片、设置和开机启动。下载失败可重试，取消下载不影响当前程序，安装替换失败会恢复旧文件。1.0.0 用户需要先手动安装一次支持更新的版本。
+</details>
 
-更新源为本仓库的 GitHub Releases 正式版。发布时运行 `./build.ps1 -Package`，将生成的 `PicRope-版本号-windows-x64.zip` 上传至对应的 `v版本号` 正式 Release，并设为最新版本。发布草稿、预发布版及源码包不会触发自动升级。
+## 界面预览
 
-## 关于你的图片
+### 图片篮子
 
-截图和编辑内容在本机处理，无需上传。图片支持 PNG、JPG/JPEG、BMP、GIF、TIF/TIFF；GIF、TIFF 等多帧图片只编辑第一帧。模糊和像素化作用于整张图片。
+在「待挂」与「全部」之间切换，多选图片后批量挂上绳子。
 
-绳子保留最近 50 张图片的展示记录，超出的图片仍保留在图片篮子和本地。图片篮子支持「待挂 / 全部」切换，重新开启自动挂图只影响之后的新截图。设置与收集副本保存在程序旁的 `data` 文件夹中。
+![图片篮子：图片多选、大图预览、批量挂图](docs/assets/basket-preview-windows.png)
 
-「收集剪贴板文字」与截图收集独立控制，默认关闭，开关状态在重启后保留。开启后新复制的文字自动进入信封，关闭后停止收集并保留已有记录。原文的换行与缩进完整保留，相同内容不会重复收集；文字记录保存在本机，重启后仍可取用。删除只移除选中的文字记录。
+### 桌面贴图与文字信封
 
-安装后，桌面会有 PicRope 快捷方式。可在 Windows「已安装的应用」中卸载；卸载会清理图绳收集的副本、设置和缓存。
+参考图置顶对照，常用文字搜索取用。
 
-## 致谢与许可
+<p align="center">
+  <img src="docs/assets/pin-preview-windows.png" width="420" height="320" alt="桌面贴图：固定置顶的示例参考图">
+  <img src="docs/assets/text-preview-windows.png" width="320" height="320" alt="文字信封：搜索框、文字记录与复制入口">
+</p>
 
-图绳参考了 [Tendedero](https://github.com/alejandrobujan/tendedero) 的截图晾衣绳创意，使用独立名称与图标。项目许可与来源声明见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)，第三方许可随安装包提供。
+### 内置编辑器
+
+长按图片进入编辑，支持画框、箭头、文字、裁剪与旋转。
+
+![内置编辑器：对示例参考图进行矩形标注](docs/assets/editor-preview-windows.png)
+
+<details>
+<summary>五套外观</summary>
+
+经典银灰、棉麻木夹、奶白轻盈、柔彩日常、石墨金属。绳子、夹子、篮子和信封同步切换。
+
+![图绳五套外观的实际界面局部](docs/assets/themes-windows.png)
+
+</details>
+
+## 常见问题
+
+<details>
+<summary>为什么截图没有自动出现？</summary>
+
+默认监听 Windows 截图文件夹。`Win+Shift+S`、`PrtScn`、微信 `Alt+A` 等将图片放到剪贴板的截图方式，需要先在托盘右键菜单的「剪贴板收集」中开启「图片」。
+
+如果关闭了「自动挂上新截图」，新截图会进入图片篮子，选中后点击「挂上绳子」即可。重新开启自动挂图只影响之后的新截图。
+
+</details>
+
+<details>
+<summary>图片和文字保存在哪里？</summary>
+
+设置、收集副本和文字记录保存在程序旁的 `data` 文件夹，重启后仍可取用。截图与编辑内容在本机处理，无需上传。
+
+绳子保留最近 50 张图片的展示记录，超出的图片仍保留在篮子和本地。文字收集关闭后保留已有记录，相同内容不会重复收集。
+
+</details>
+
+<details>
+<summary>「取下放篮子」和删除有什么区别？</summary>
+
+「取下放篮子」保留本地文件和收集记录，可以重新挂回。图片左上角 ×、右键「移到回收站」以及篮子中的「删除所选」会删除图片文件并移除记录，可从系统回收站恢复。
+
+托盘「更多操作」中的「全部取下」保留所有原文件。删除文字只移除选中的文字记录。
+
+</details>
+
+<details>
+<summary>支持哪些图片格式？</summary>
+
+支持 PNG、JPG/JPEG、BMP、GIF、TIF/TIFF。GIF、TIFF 等多帧图片只编辑第一帧；模糊与像素化作用于整张图片。
+
+</details>
+
+<details>
+<summary>如何更新和卸载？</summary>
+
+1.1.0 起支持应用内更新。托盘右键 →「更多操作」→「检查更新」，下载安装后重启，保留图片、设置和开机启动。1.0.0 用户需先手动安装一次支持更新的版本。
+
+程序启动后及运行期间也会检查本仓库 GitHub Releases 的正式版，并通过系统通知提醒。更新文件经过大小、SHA256 和程序版本校验；取消或下载失败不影响当前程序，安装替换失败会恢复旧文件。
+
+可从 Windows「已安装的应用」中卸载，卸载会清理图绳收集的副本、设置和缓存。
+
+</details>
+
+## 开发
+
+Windows 版本使用 C# 与 WPF。在 PowerShell 中执行：
+
+```powershell
+.\build.ps1
+```
+
+生成发布包：
+
+```powershell
+.\build.ps1 -Package
+```
+
+<details>
+<summary>发布与应用内更新</summary>
+
+将生成的 `PicRope-版本号-windows-x64.zip` 上传至对应的 `v版本号` 正式 Release，并设为最新版本。发布草稿、预发布版及源码包不会触发自动升级。
+
+</details>
+
+## 许可与致谢
+
+图绳是 [Tendedero](https://github.com/alejandrobujan/tendedero) 的独立 Windows 社区移植版本，使用独立名称与图标，不代表上游项目。
+
+许可、名称与图标条款及来源声明见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。第三方许可随安装包提供。
+
+展示图背景采用微软发布的 [Windows 11 Bloom 壁纸](https://blogs.windows.com/windowsexperience/2021/10/06/windows-11-blossoms-with-bloom-a-new-symbol-for-a-new-operating-system/)，版权归 Microsoft 所有。
