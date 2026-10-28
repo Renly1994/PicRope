@@ -24,6 +24,7 @@ namespace ScreenLine
     {
         readonly Gallery gallery;
         readonly Action<ShotAction, CaptureItem> act;
+        readonly Func<string, bool> watchedFolder;
         internal readonly HoverPreview Preview;
         readonly ScrollViewer viewport = new ScrollViewer();
         readonly Canvas content = new Canvas();
@@ -98,10 +99,11 @@ namespace ScreenLine
             }
         }
 
-        public ShelfWindow(Gallery gallery, Action<ShotAction, CaptureItem> act, Action enableClipboard)
+        public ShelfWindow(Gallery gallery, Action<ShotAction, CaptureItem> act, Action enableClipboard, Func<string, bool> watchedFolder = null)
         {
             this.gallery = gallery;
             this.act = act;
+            this.watchedFolder = watchedFolder;
             Preview = new HoverPreview(this, gallery.Store.State.HoverPreview);
             scrollHover.Tick += delegate
             {
@@ -316,7 +318,7 @@ namespace ScreenLine
                 ShotCard card;
                 if (!cards.TryGetValue(item.Path, out card))
                 {
-                    card = new ShotCard(item, act);
+                    card = new ShotCard(item, act, watchedFolder);
                     var hovered = card;
                     card.Surface.MouseEnter += delegate { Preview.Enter(hovered); };
                     card.Surface.MouseLeave += delegate { Preview.Leave(hovered); };
@@ -774,6 +776,7 @@ namespace ScreenLine
         readonly DispatcherTimer hold = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(480) };
         readonly DispatcherTimer flash = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.2) };
         readonly Action<ShotAction, CaptureItem> act;
+        readonly Func<string, bool> watchedFolder;
         readonly ImageMenu menu;
         internal ImageMenu ActionMenu { get { return menu; } }
         Point start;
@@ -799,11 +802,12 @@ namespace ScreenLine
         public int ColorIndex { get; private set; }
         internal double MountX { get { return xMotion.Target; } }
 
-        public ShotCard(CaptureItem item, Action<ShotAction, CaptureItem> act)
+        public ShotCard(CaptureItem item, Action<ShotAction, CaptureItem> act, Func<string, bool> watchedFolder = null)
         {
             Item = item;
             Appearance = LineTheme.All[0];
             this.act = act;
+            this.watchedFolder = watchedFolder;
             Width = 164;
             Height = 178;
             RenderTransform = tilt;
@@ -830,7 +834,7 @@ namespace ScreenLine
             close.VerticalAlignment = VerticalAlignment.Top;
             close.Focusable = false;
             close.Opacity = 0;
-            close.ToolTip = "删除图片（移到回收站）";
+            close.ToolTip = watchedFolder != null && watchedFolder(item.Path) ? "取下图片（保留监控文件夹中的原文件）" : "删除图片（移到回收站）";
             close.Click += delegate { act(ShotAction.Trash, item); };
             imageLayer.Children.Add(close);
             Surface.Child = imageLayer;
@@ -878,6 +882,7 @@ namespace ScreenLine
             Surface.LostMouseCapture += delegate { hold.Stop(); pressed = false; };
             hold.Tick += delegate { hold.Stop(); held = true; pressed = false; Surface.ReleaseMouseCapture(); act(ShotAction.Edit, item); };
             menu = new ImageMenu(delegate(ShotAction action) { act(action, Item); });
+            if (watchedFolder != null && watchedFolder(item.Path)) menu.SetTrashEnabled(false);
             Surface.MouseRightButtonUp += delegate(object sender, MouseButtonEventArgs e)
             {
                 e.Handled = true;

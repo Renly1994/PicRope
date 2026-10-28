@@ -27,6 +27,7 @@ namespace ScreenLine
         readonly HashSet<string> processing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         readonly DispatcherTimer timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
         readonly DateTime launched = DateTime.UtcNow;
+        readonly Dictionary<string, FileSystemWatcher> folderWatches = new Dictionary<string, FileSystemWatcher>(StringComparer.OrdinalIgnoreCase);
         FileSystemWatcher watcher;
         uint clipboardSequence;
         DateTime clipboardDue = DateTime.MaxValue;
@@ -69,6 +70,109 @@ namespace ScreenLine
             }
         }
 
+        public IList<WatchFolderItem> WatchFolders
+        {
+            get { return gallery.Store.State.WatchFolders; }
+        }
+
+        public bool IsWatchedPath(string path)
+        {
+            return WatchFolderRules.Contains(gallery.Store.State.WatchFolders, path);
+        }
+
+        public bool WatchFoldersEnabled
+        {
+            get { return gallery.Store.State.WatchFoldersEnabled; }
+        }
+
+        public bool AddWatchFolder(string path, bool includeChildren)
+        {
+            string folder = WatchFolderRules.Normalize(path);
+            if (folder.Length == 0) return false;
+            var existing = FindWatchFolder(folder);
+            if (existing != null)
+            {
+                if (existing.IncludeChildren != includeChildren) SetWatchFolderChildren(folder, includeChildren);
+                return true;
+            }
+            var previousList = WatchFolders.ToArray();
+            bool previousEnabled = gallery.Store.State.WatchFoldersEnabled;
+            bool first = WatchFolders.Count == 0;
+            WatchFolders.Add(new WatchFolderItem(folder, includeChildren));
+            if (first) gallery.Store.State.WatchFoldersEnabled = true;
+            try { gallery.Store.Save(); }
+            catch
+            {
+                WatchFolders.Clear(); foreach (var kept in previousList) WatchFolders.Add(kept);
+                gallery.Store.State.WatchFoldersEnabled = previousEnabled;
+                throw;
+            }
+            AttachFolderWatches();
+            gallery.Notify();
+            return true;
+        }
+
+        public bool RemoveWatchFolder(string path)
+        {
+            var existing = FindWatchFolder(path);
+            if (existing == null) return false;
+            var previousList = WatchFolders.ToArray();
+            bool previousEnabled = gallery.Store.State.WatchFoldersEnabled;
+            WatchFolders.Remove(existing);
+            // 目录全部移除后自动关闭开关，避免空列表仍处于开启状态。
+            if (WatchFolders.Count == 0) gallery.Store.State.WatchFoldersEnabled = false;
+            try { gallery.Store.Save(); }
+            catch
+            {
+                WatchFolders.Clear(); foreach (var kept in previousList) WatchFolders.Add(kept);
+                gallery.Store.State.WatchFoldersEnabled = previousEnabled;
+                throw;
+            }
+            AttachFolderWatches();
+            gallery.Notify();
+            return true;
+        }
+
+        public bool SetWatchFolderChildren(string path, bool includeChildren)
+        {
+            var existing = FindWatchFolder(path);
+            if (existing == null || existing.IncludeChildren == includeChildren) return false;
+            bool previous = existing.IncludeChildren;
+            existing.IncludeChildren = includeChildren;
+            try { gallery.Store.Save(); }
+            catch { existing.IncludeChildren = previous; throw; }
+            AttachFolderWatches();
+            gallery.Notify();
+            return true;
+        }
+
+        public void EnableWatchFolders()
+        {
+            if (WatchFoldersEnabled || WatchFolders.Count == 0) return;
+            gallery.Store.State.WatchFoldersEnabled = true;
+            try { gallery.Store.Save(); }
+            catch { gallery.Store.State.WatchFoldersEnabled = false; throw; }
+            AttachFolderWatches();
+            gallery.Notify();
+        }
+
+        public void DisableWatchFolders()
+        {
+            if (!WatchFoldersEnabled) return;
+            gallery.Store.State.WatchFoldersEnabled = false;
+            try { gallery.Store.Save(); }
+            catch { gallery.Store.State.WatchFoldersEnabled = true; throw; }
+            AttachFolderWatches();
+            gallery.Notify();
+        }
+
+        WatchFolderItem FindWatchFolder(string path)
+        {
+            string folder = WatchFolderRules.Normalize(path);
+            if (folder.Length == 0) return null;
+            return WatchFolders.FirstOrDefault(item => string.Equals(WatchFolderRules.Normalize(item.Path), folder, StringComparison.OrdinalIgnoreCase));
+        }
+
         public void IgnoreCurrentClipboard()
         {
             clipboardSequence = WindowsNative.GetClipboardSequenceNumber();
@@ -78,6 +182,7 @@ namespace ScreenLine
         public async Task Start()
         {
             AttachWatcher();
+            AttachFolderWatches();
             timer.Start();
             var saved = gallery.Store.State.Images.ToArray();
             var collected = saved.Concat(gallery.Store.State.Collection);
@@ -104,16 +209,79 @@ namespace ScreenLine
         void AttachWatcher()
         {
             if (watcher != null || !Directory.Exists(folder)) return;
-            watcher = new FileSystemWatcher(folder) { NotifyFilter = NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.LastWrite };
-            watcher.Created += delegate(object sender, FileSystemEventArgs args) { Queue(args.FullPath); };
-            watcher.Changed += delegate(object sender, FileSystemEventArgs args) { Queue(args.FullPath); };
-            watcher.Renamed += delegate(object sender, RenamedEventArgs args) { Queue(args.FullPath); };
-            watcher.EnableRaisingEvents = true;
+            watcher = CreateWatcher(folder, false);
             foreach (string path in Directory.EnumerateFiles(folder))
             {
                 if (File.GetCreationTimeUtc(path) < launched) seen.Add(path);
                 else Queue(path);
             }
+        }
+
+        void AttachFolderWatches()
+        {
+            if (disposed) return;
+            var wanted = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            if (gallery.Store.State.WatchFoldersEnabled)
+                foreach (var item in gallery.Store.State.WatchFolders)
+                {
+                    string folder = WatchFolderRules.Normalize(item.Path);
+                    if (folder.Length > 0 && !wanted.ContainsKey(folder) && Directory.Exists(folder)) wanted[folder] = item.IncludeChildren;
+                }
+            foreach (var watched in folderWatches.Keys.ToArray())
+                if (!wanted.ContainsKey(watched)) DetachFolderWatch(watched);
+            foreach (var entry in wanted)
+            {
+                FileSystemWatcher existing;
+                if (folderWatches.TryGetValue(entry.Key, out existing))
+                {
+                    if (existing.IncludeSubdirectories == entry.Value) continue;
+                    // 子文件夹范围变化后整体重建监听，避免中途变更触发旧文件事件。
+                    DetachFolderWatch(entry.Key);
+                }
+                var created = CreateWatcher(entry.Key, entry.Value);
+                folderWatches[entry.Key] = created;
+                // 挂载监听时已有图片不上绳，只收集之后新增的图片。
+                MarkSeen(entry.Key, entry.Value);
+            }
+        }
+
+        void DetachFolderWatch(string folder)
+        {
+            FileSystemWatcher existing;
+            if (!folderWatches.TryGetValue(folder, out existing)) return;
+            existing.Dispose();
+            folderWatches.Remove(folder);
+        }
+
+        void MarkSeen(string folder, bool includeChildren)
+        {
+            foreach (string path in Directory.EnumerateFiles(folder, "*", includeChildren ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly))
+                seen.Add(path);
+        }
+
+        FileSystemWatcher CreateWatcher(string target, bool includeChildren)
+        {
+            var created = new FileSystemWatcher(target) { NotifyFilter = NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.LastWrite, InternalBufferSize = 64 * 1024 };
+            created.IncludeSubdirectories = includeChildren;
+            FileSystemEventHandler queue = delegate(object sender, FileSystemEventArgs args) { Queue(args.FullPath); };
+            created.Created += queue;
+            created.Changed += queue;
+            created.Renamed += delegate(object sender, RenamedEventArgs args) { Queue(args.FullPath); };
+            created.Error += delegate(object sender, ErrorEventArgs args) { Recycle(created); };
+            created.EnableRaisingEvents = true;
+            return created;
+        }
+
+        void Recycle(FileSystemWatcher which)
+        {
+            // 缓冲区溢出或目录消失后重建监听，由计时器重新挂载，避免监控静默失效。
+            dispatcher.BeginInvoke(new Action(delegate
+            {
+                if (disposed) return;
+                if (ReferenceEquals(which, watcher)) { watcher.Dispose(); watcher = null; return; }
+                var entry = folderWatches.FirstOrDefault(pair => ReferenceEquals(pair.Value, which));
+                if (entry.Value != null) DetachFolderWatch(entry.Key);
+            }));
         }
 
         void Queue(string path)
@@ -135,6 +303,7 @@ namespace ScreenLine
         void Tick(object sender, EventArgs args)
         {
             AttachWatcher();
+            AttachFolderWatches();
             foreach (var candidate in pending.ToArray())
                 if (!processing.Contains(candidate.Key)) ProcessFile(candidate.Key);
             if (!clipboardBusy && DateTime.UtcNow >= clipboardDue)
@@ -311,6 +480,8 @@ namespace ScreenLine
             disposed = true;
             timer.Stop();
             if (watcher != null) watcher.Dispose();
+            foreach (var watched in folderWatches.Values.ToArray()) watched.Dispose();
+            folderWatches.Clear();
         }
     }
 }

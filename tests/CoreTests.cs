@@ -200,6 +200,83 @@ namespace ScreenLine.Tests
                 File.WriteAllText(Path.Combine(store.Root, "state.json"), "{\"Images\":[\"旧截图.png\"]}");
                 Check(new StateStore(store.Root).State.AutoHang);
             });
+            Run("监控文件夹列表可保存并在重启后恢复，旧版配置默认关闭", delegate
+            {
+                string profile = Path.Combine(root, "watch-folder-profile");
+                var store = new StateStore(profile);
+                Check(store.State.WatchFolders.Count == 0 && !store.State.WatchFoldersEnabled);
+                store.State.WatchFolders.Add(new WatchFolderItem(Path.Combine(root, "监控文件夹"), false));
+                store.State.WatchFolders.Add(new WatchFolderItem(@"D:\素材", true));
+                store.State.WatchFoldersEnabled = true;
+                store.Save();
+                var restored = new StateStore(profile);
+                Check(restored.State.WatchFoldersEnabled && restored.State.WatchFolders.Count == 2
+                    && restored.State.WatchFolders[0].Path == Path.Combine(root, "监控文件夹") && !restored.State.WatchFolders[0].IncludeChildren
+                    && restored.State.WatchFolders[1].Path == @"D:\素材" && restored.State.WatchFolders[1].IncludeChildren);
+                Directory.CreateDirectory(Path.Combine(root, "watch-folder-legacy"));
+                File.WriteAllText(Path.Combine(root, "watch-folder-legacy", "state.json"), "{\"Images\":[\"旧截图.png\"]}");
+                var legacy = new StateStore(Path.Combine(root, "watch-folder-legacy"));
+                Check(!legacy.State.WatchFoldersEnabled && legacy.State.WatchFolders.Count == 0 && legacy.State.Images.Single() == "旧截图.png");
+            });
+            Run("监控路径会规整，无效路径被拒绝", delegate
+            {
+                Check(WatchFolderRules.Normalize(null) == "" && WatchFolderRules.Normalize("   ") == "");
+                Check(WatchFolderRules.Normalize(" 包含|非法?字符 ") == "");
+                string watch = Path.Combine(root, "监控目录");
+                Check(WatchFolderRules.Normalize("  " + watch + Path.DirectorySeparatorChar + " ") == watch);
+                Check(WatchFolderRules.Normalize(watch) == watch);
+            });
+            Run("仅监控存在且已开启的文件夹", delegate
+            {
+                string existing = Path.Combine(root, "已存在目录");
+                Directory.CreateDirectory(existing);
+                Check(WatchFolderRules.ShouldWatch(existing, true));
+                Check(!WatchFolderRules.ShouldWatch(existing, false));
+                Check(!WatchFolderRules.ShouldWatch(Path.Combine(root, "缺失目录"), true));
+                Check(!WatchFolderRules.ShouldWatch("", true));
+                Check(!WatchFolderRules.ShouldWatch(null, true));
+            });
+            Run("监控文件夹在菜单中显示简短名称", delegate
+            {
+                Check(WatchFolderRules.Brief(null) == "未设置" && WatchFolderRules.Brief("   ") == "未设置");
+                Check(WatchFolderRules.Brief(@"C:\Users\移动\图片") == "图片");
+                Check(WatchFolderRules.Brief(@"C:\目录" + Path.DirectorySeparatorChar) == "目录");
+                Check(WatchFolderRules.Brief(@"D:\" + new string('图', 30)) == "…" + new string('图', 11));
+            });
+            Run("监控目录数量提示与长路径截断", delegate
+            {
+                Check(WatchFolderRules.Summarize(null) == "未设置" && WatchFolderRules.Summarize(new System.Collections.Generic.List<WatchFolderItem>()) == "未设置");
+                var folders = new System.Collections.Generic.List<WatchFolderItem> { new WatchFolderItem(@"C:\截图", false) };
+                Check(WatchFolderRules.Summarize(folders) == "1 个目录");
+                folders.Add(new WatchFolderItem(@"D:\素材", true));
+                Check(WatchFolderRules.Summarize(folders) == "2 个目录");
+                Check(WatchFolderRules.Compact(@"C:\Users\移动\图片", 40).EndsWith("图片"));
+                string longPath = @"C:\" + new string('目', 30) + @"\文件";
+                string compact = WatchFolderRules.Compact(longPath, 40);
+                Check(compact.StartsWith("…") && compact.EndsWith(@"\文件") && compact.Length < longPath.Length);
+            });
+            Run("监控目录内文件可识别，目录外与同名前缀不误判", delegate
+            {
+                var folders = new System.Collections.Generic.List<WatchFolderItem> { new WatchFolderItem(Path.Combine(root, "监控根"), true) };
+                Check(WatchFolderRules.Contains(folders, Path.Combine(root, "监控根", "图片.png")));
+                Check(WatchFolderRules.Contains(folders, Path.Combine(root, "监控根", "子目录", "图片.png")));
+                Check(!WatchFolderRules.Contains(folders, Path.Combine(root, "监控根2", "图片.png")));
+                Check(!WatchFolderRules.Contains(folders, Path.Combine(root, "其他", "图片.png")));
+                Check(!WatchFolderRules.Contains(null, Path.Combine(root, "a.png")));
+                Check(!WatchFolderRules.Contains(folders, null));
+            });
+            Run("移除监控图片记录不删除原文件", delegate
+            {
+                var gallery = new Gallery(new StateStore(Path.Combine(root, "forget-profile")));
+                string file = WritePicture("受保护图片.png", 130);
+                var image = ImageContent.Read(file);
+                gallery.Collect(file, image);
+                gallery.Add(file, image);
+                gallery.Forget(gallery.Items.Single());
+                Check(gallery.Items.Count == 0 && gallery.Collected.Count == 0 && File.Exists(file));
+                var restored = new StateStore(gallery.Store.Root);
+                Check(restored.State.Images.Count == 0 && restored.State.Collection.Count == 0 && File.Exists(file));
+            });
             Run("设置与中文路径可持久化并原子替换", delegate
             {
                 string profile = Path.Combine(root, "state-profile");
