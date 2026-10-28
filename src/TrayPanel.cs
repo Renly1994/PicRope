@@ -59,12 +59,15 @@ namespace ScreenLine
   </Style>
 </ResourceDictionary>");
 
-        internal readonly Button VisibilityButton, BasketButton, TextButton, AppearanceButton, ExitButton, MoreButton, ScreenButton;
-        internal readonly CheckBox Pictures, Text, AutoHang;
+        internal readonly Button VisibilityButton, BasketButton, TextButton, AppearanceButton, ExitButton, MoreButton, ScreenButton, ManageWatchButton;
+        internal readonly CheckBox Pictures, Text, AutoHang, WatchFolder;
         internal readonly LightMenu MoreMenu = new LightMenu("更多操作", "");
         internal readonly LightMenu ScreenMenu = new LightMenu("显示屏幕", "") { Width = 320 };
         internal readonly TextBlock ScreenMode = new TextBlock { FontSize = 11, Foreground = LightTheme.Brush("#65717F"), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 22, 0) };
         internal readonly TextBlock Shortcut = new TextBlock { FontSize = 10, Foreground = LightTheme.Brush("#65717F"), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
+        internal readonly TextBlock WatchStatus = new TextBlock { FontSize = 11, Foreground = LightTheme.Brush("#65717F"), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 22, 0) };
+
+        internal static Style ToggleStyle { get { return (Style)styles["Toggle"]; } }
 
         internal TrayPanel()
         {
@@ -97,6 +100,11 @@ namespace ScreenLine
             Pictures = Toggle("图片", "picture", "收集剪贴板图片"); Text = Toggle("文字", "text", "收集剪贴板文字");
             panel.Children.Add(Pair(Pictures, Text));
             AutoHang = Toggle("新图片自动上绳", "show", "新图片自动上绳"); panel.Children.Add(AutoHang);
+            WatchFolder = Toggle("监控文件夹", "folder", "监控文件夹"); panel.Children.Add(WatchFolder);
+            ManageWatchButton = Action("管理监控文件夹", "folder"); ManageWatchButton.Height = 40;
+            var watchArrow = Icon("chevron"); watchArrow.Width = 13; watchArrow.Height = 13; watchArrow.HorizontalAlignment = HorizontalAlignment.Right;
+            ((Grid)ManageWatchButton.Content).Children.Add(WatchStatus); ((Grid)ManageWatchButton.Content).Children.Add(watchArrow);
+            panel.Children.Add(ManageWatchButton);
             panel.Children.Add(Divider());
             MoreButton = Action("更多操作", "more");
             var arrow = Icon("chevron"); arrow.Width = 13; arrow.Height = 13; arrow.HorizontalAlignment = HorizontalAlignment.Right;

@@ -1796,7 +1796,7 @@ namespace ScreenLine.Tests
             controller.ShowTrayMenu();
             await Until(() => controller.TrayMenu.IsOpen && controller.TrayMenu.ActualHeight > 0);
             var trayMenu = controller.TrayMenu;
-            Check(trayMenu.ActualHeight < 480 && trayMenu.ActualWidth <= 360, "托盘主面板紧凑显示，屏幕选择直接可见");
+            Check(trayMenu.ActualHeight < 570 && trayMenu.ActualWidth <= 360, "托盘主面板紧凑显示，屏幕选择直接可见");
             Point topLeft = trayMenu.PointToScreen(new Point());
             Point bottomRight = trayMenu.PointToScreen(new Point(trayMenu.ActualWidth, trayMenu.ActualHeight));
             Check(topLeft.X >= screen.Bounds.Left && topLeft.Y >= screen.Bounds.Top

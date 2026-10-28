@@ -19,6 +19,7 @@ namespace ScreenLine
         public bool CollectTextClipboard { get; set; }
         public bool AutoHang { get; set; }
         public bool HoverPreview { get; set; }
+        public bool WatchFoldersEnabled { get; set; }
         public string Theme { get; set; }
         public string DisplayDevice { get; set; }
         public string LastUpdateNotification { get; set; }
@@ -27,8 +28,9 @@ namespace ScreenLine
         public List<string> Images { get; set; }
         public List<string> Collection { get; set; }
         public List<TextItem> Texts { get; set; }
+        public List<WatchFolderItem> WatchFolders { get; set; }
 
-        public SavedState() { Images = new List<string>(); Collection = new List<string>(); Texts = new List<TextItem>(); Theme = "classic"; AutoHang = true; HoverPreview = true; CaptureModifiers = 3; CaptureKey = (uint)'S'; }
+        public SavedState() { Images = new List<string>(); Collection = new List<string>(); Texts = new List<TextItem>(); WatchFolders = new List<WatchFolderItem>(); Theme = "classic"; AutoHang = true; HoverPreview = true; CaptureModifiers = 3; CaptureKey = (uint)'S'; }
     }
 
     internal sealed class StateStore
@@ -53,6 +55,7 @@ namespace ScreenLine
                 if (State.Images == null) State.Images = new List<string>();
                 if (State.Collection == null) State.Collection = new List<string>();
                 if (State.Texts == null) State.Texts = new List<TextItem>();
+                if (State.WatchFolders == null) State.WatchFolders = new List<WatchFolderItem>();
             }
             catch (ArgumentException ex) { Log(ex); }
             catch (InvalidOperationException ex) { Log(ex); }
@@ -183,6 +186,90 @@ namespace ScreenLine
         public static bool SameFile(string a, string b)
         {
             return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    internal sealed class WatchFolderItem
+    {
+        public string Path { get; set; }
+        public bool IncludeChildren { get; set; }
+
+        public WatchFolderItem() { }
+        public WatchFolderItem(string path, bool includeChildren) { Path = path; IncludeChildren = includeChildren; }
+    }
+
+    internal static class WatchFolderRules
+    {
+        public static string Normalize(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return "";
+            string full;
+            try { full = Path.GetFullPath(path.Trim()); }
+            catch (ArgumentException) { return ""; }
+            catch (NotSupportedException) { return ""; }
+            catch (IOException) { return ""; }
+            catch (System.Security.SecurityException) { return ""; }
+            string root = Path.GetPathRoot(full);
+            string trimmed = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (string.IsNullOrEmpty(root) || trimmed.Length < root.Length) return string.IsNullOrEmpty(root) ? full : root;
+            return trimmed;
+        }
+
+        public static bool ShouldWatch(string folder, bool enabled)
+        {
+            return enabled && !string.IsNullOrEmpty(folder) && Directory.Exists(folder);
+        }
+
+        public static string Brief(string folder)
+        {
+            string path = Normalize(folder);
+            if (path.Length == 0) return "未设置";
+            string leaf = Path.GetFileName(path);
+            if (leaf.Length == 0) leaf = path;
+            return Fit(leaf, 24);
+        }
+
+        public static string Summarize(IList<WatchFolderItem> folders)
+        {
+            if (folders == null || folders.Count == 0) return "未设置";
+            return folders.Count + " 个目录";
+        }
+
+        public static bool Contains(IList<WatchFolderItem> folders, string path)
+        {
+            if (folders == null || folders.Count == 0 || string.IsNullOrEmpty(path)) return false;
+            foreach (var item in folders)
+            {
+                string folder = Normalize(item.Path);
+                if (folder.Length > 0 && FileRules.IsInside(path, folder)) return true;
+            }
+            return false;
+        }
+
+        public static string Compact(string path, int budget)
+        {
+            return Fit(Normalize(path), budget);
+        }
+
+        // 菜单与托盘面板空间有限，中文按两个半宽字符折算后截断。
+        static string Fit(string value, int budget)
+        {
+            if (Weight(value) <= budget) return value;
+            int weight = 0, start = value.Length;
+            while (start > 1)
+            {
+                weight += value[start - 1] > 127 ? 2 : 1;
+                if (weight > budget - 2) break;
+                start--;
+            }
+            return "…" + value.Substring(start);
+        }
+
+        static int Weight(string value)
+        {
+            int total = 0;
+            foreach (char character in value) total += character > 127 ? 2 : 1;
+            return total;
         }
     }
 
@@ -522,6 +609,15 @@ namespace ScreenLine
         public void Remove(CaptureItem item)
         {
             Items.Remove(item);
+            Save();
+            Notify();
+        }
+
+        public void Forget(CaptureItem item)
+        {
+            bool changed = Items.Remove(item);
+            changed |= Collected.Remove(item);
+            if (!changed) return;
             Save();
             Notify();
         }

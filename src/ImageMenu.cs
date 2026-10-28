@@ -62,7 +62,7 @@ namespace ScreenLine
                 else if (args.OriginalSource == this && (args.Key == Key.Down || args.Key == Key.Up || args.Key == Key.Tab))
                 {
                     bool previous = args.Key == Key.Up || (args.Key == Key.Tab && (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
-                    Actions[previous ? ShotAction.Trash : ShotAction.Open].Focus(); args.Handled = true;
+                    (previous ? LastAction() : Actions[ShotAction.Open]).Focus(); args.Handled = true;
                 }
                 else if (args.Key == Key.Space)
                 {
@@ -76,6 +76,20 @@ namespace ScreenLine
         }
 
         internal void SetDetails(string value) { details.Text = value; }
+
+        // 监控文件夹中的图片不允许删除源文件，隐藏回收站入口，删除统一退化为取下。
+        internal void SetTrashEnabled(bool enabled)
+        {
+            Actions[ShotAction.Trash].Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        Button LastAction()
+        {
+            Button found = Actions[ShotAction.Open];
+            foreach (var button in Actions.Values)
+                if (button.Visibility == Visibility.Visible) found = button;
+            return found;
+        }
 
         Button Action(string title, string icon, ShotAction action, Action<ShotAction> execute)
         {
