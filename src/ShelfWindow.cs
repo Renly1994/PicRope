@@ -18,15 +18,17 @@ using Forms = System.Windows.Forms;
 
 namespace ScreenLine
 {
-    internal enum ShotAction { Copy, Open, Edit, Remove, Trash, Save, Locate }
+    internal enum ShotAction { Copy, Open, Edit, Remove, Trash, Save, Locate, RemoveLeft, RemoveRight, RemoveOthers, RemoveAll }
 
     internal sealed class ShelfWindow : Window
     {
+        const double HiddenY = -300;
         readonly Gallery gallery;
         readonly Action<ShotAction, CaptureItem> act;
         internal readonly HoverPreview Preview;
         readonly ScrollViewer viewport = new ScrollViewer();
         readonly Canvas content = new Canvas();
+        readonly Canvas line = new Canvas();
         readonly System.Windows.Shapes.Path rope = new System.Windows.Shapes.Path();
         readonly LinearGradientBrush edgeMask = new LinearGradientBrush(new GradientStopCollection {
             new GradientStop(Colors.White, 0), new GradientStop(Colors.White, 0.03),
@@ -55,8 +57,8 @@ namespace ScreenLine
         readonly Border textCounter = new Border();
         public event Action TextRequested;
         public event Action RopeHidden;
-        readonly TranslateTransform slide = new TranslateTransform(0, -240);
-        readonly SpringMotion revealMotion = new SpringMotion(0.42, 0.82, -240);
+        readonly TranslateTransform slide = new TranslateTransform(0, HiddenY);
+        readonly SpringMotion revealMotion = new SpringMotion(0.42, 0.82, HiddenY);
         readonly SpringMotion ropeMotion = new SpringMotion(0.55, 0.78, 18);
         readonly SpringMotion scrollMotion = new SpringMotion(0.55, 0.78, 0);
         readonly Stopwatch clock = Stopwatch.StartNew();
@@ -71,7 +73,7 @@ namespace ScreenLine
         double lastFrame, hideTime, hideFrom, drawnWidth = -1, drawnSag = -1;
         double lastScrollOffset;
         bool rendering;
-        bool pinned, previousDown, suppressEdge, trackingScrollHover;
+        bool pinned, previousDown, suppressEdge, trackingScrollHover, avoidingCaption;
         string viewingName;
         IntPtr viewingWindow;
         DateTime viewerSearchUntil;
@@ -85,7 +87,7 @@ namespace ScreenLine
         internal bool Capturing { get; set; }
         double AccessoryWidth { get { return (gallery.Store.State.CollectClipboard ? 156 : 0) + (gallery.Store.State.CollectTextClipboard ? 104 : 0); } }
         double PhotoWidth { get { return Math.Max(1, (ActualWidth > 0 ? ActualWidth : Width) - 48 - AccessoryWidth); } }
-        double LineWidth { get { return PhotoWidth + AccessoryWidth; } }
+        double LineWidth { get { return Math.Max(1, (ActualWidth > 0 ? ActualWidth : Width) - 48); } }
         double ScrollLimit { get { return Math.Max(0, content.Width - PhotoWidth); } }
         internal Point TextAnchor
         {
@@ -150,7 +152,7 @@ namespace ScreenLine
                 e.Handled = true;
             };
             var root = new Grid();
-            var line = new Canvas { Margin = new Thickness(24, 0, 24, 0), RenderTransform = slide, IsHitTestVisible = false };
+            line.Margin = new Thickness(24, 0, 24, 0); line.RenderTransform = slide; line.IsHitTestVisible = false;
             line.Children.Add(rope); root.Children.Add(line);
             root.Children.Add(viewport); Content = root;
             Appearance = LineTheme.FromId(gallery.Store.State.Theme);
@@ -235,7 +237,8 @@ namespace ScreenLine
                 MoveToDisplay();
                 pointer.Start();
             };
-            SizeChanged += delegate { LayoutCards(); };
+            Loaded += delegate { Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(delegate { if (!closing) MoveToDisplay(); })); };
+            SizeChanged += delegate { UpdateAccessories(); LayoutCards(); };
             pointer.Tick += Tick;
             gallery.Changed += Update;
             Microsoft.Win32.SystemEvents.DisplaySettingsChanged += DisplaysChanged;
@@ -282,9 +285,10 @@ namespace ScreenLine
             var screen = SelectedDisplay();
             Display = screen;
             double scale = WindowsNative.MonitorScale(screen);
+            Height = 220;
             Width = screen.WorkingArea.Width / scale;
             if (Handle != IntPtr.Zero)
-                WindowsNative.SetWindowPos(Handle, new IntPtr(-1), screen.WorkingArea.Left, screen.WorkingArea.Top, screen.WorkingArea.Width, (int)Math.Round(Height * scale), 0x10);
+                WindowsNative.SetWindowPos(Handle, new IntPtr(-1), screen.WorkingArea.Left, screen.WorkingArea.Top, screen.WorkingArea.Width, (int)Math.Round(220 * scale), 0x10);
             LayoutCards();
         }
 
@@ -316,7 +320,7 @@ namespace ScreenLine
                 ShotCard card;
                 if (!cards.TryGetValue(item.Path, out card))
                 {
-                    card = new ShotCard(item, act);
+                    card = new ShotCard(item, act, gallery, HangingItems);
                     var hovered = card;
                     card.Surface.MouseEnter += delegate { Preview.Enter(hovered); };
                     card.Surface.MouseLeave += delegate { Preview.Leave(hovered); };
@@ -367,6 +371,11 @@ namespace ScreenLine
             }
         }
 
+        internal CaptureItem[] HangingItems()
+        {
+            return gallery.Items.Where(item => cards.ContainsKey(item.Path) && !cards[item.Path].Detached).ToArray();
+        }
+
         public void ApplyTheme(LineTheme theme)
         {
             Appearance = theme;
@@ -392,11 +401,11 @@ namespace ScreenLine
             geometry.Figures.Add(shape);
             rope.Data = geometry;
             Point hook = PictureBasket.Hook(Appearance);
-            double fraction = (LineWidth - 156 + 22 + hook.X) / LineWidth;
+            double fraction = (PhotoWidth + AccessoryWidth - 156 + 22 + hook.X) / LineWidth;
             double offset = 4 * drawnSag * fraction * (1 - fraction);
             double basketTop = 18 + offset - hook.Y;
             Canvas.SetTop(BasketButton, basketTop);
-            double textFraction = (PhotoWidth + 62) / LineWidth;
+            double textFraction = (PhotoWidth + (gallery.Store.State.CollectClipboard ? 62 : 48)) / LineWidth;
             double textTop = 18 + 4 * drawnSag * textFraction * (1 - textFraction) - 7;
             Canvas.SetTop(TextButton, textTop);
             double countTop = basketTop + basketImage.Height + 6 - textTop;
@@ -417,6 +426,7 @@ namespace ScreenLine
             bool pictures = gallery.Store.State.CollectClipboard, texts = gallery.Store.State.CollectTextClipboard;
             BasketButton.Visibility = basketHolder.Visibility = pictures ? Visibility.Visible : Visibility.Collapsed;
             TextButton.Visibility = textHolder.Visibility = texts ? Visibility.Visible : Visibility.Collapsed;
+            basketHolder.Margin = new Thickness(0, 0, 24, 0);
             textHolder.Margin = new Thickness(0, 0, pictures ? 166 : 24, 0);
             viewport.Margin = new Thickness(24, 0, 24 + AccessoryWidth, 0);
             if (!pictures) { basketMotion.Snap(0); basketCounterMotion.Snap(1); }
@@ -586,8 +596,9 @@ namespace ScreenLine
             awaySince = DateTime.MaxValue;
             if (shown && WindowsNative.FullScreen(Display, Handle)) return;
             if (shown == Revealed) return;
+            if (shown) avoidingCaption = false;
             Revealed = shown;
-            revealMotion.Target = shown ? 0 : -240;
+            revealMotion.Target = shown ? 0 : HiddenY;
             hideFrom = revealMotion.Position;
             hideTime = 0;
             StartRendering();
@@ -644,11 +655,17 @@ namespace ScreenLine
             {
                 hideTime += elapsed;
                 double t = Math.Min(1, hideTime / 0.22);
-                revealMotion.Position = hideFrom + (-240 - hideFrom) * t * t;
-                revealMotion.Velocity = 2 * (-240 - hideFrom) * t / 0.22;
-                if (t == 1) revealMotion.Snap(-240);
+                double remaining = 1 - t;
+                revealMotion.Position = hideFrom + (HiddenY - hideFrom) * (1 - remaining * remaining * remaining);
+                revealMotion.Velocity = 3 * (HiddenY - hideFrom) * remaining * remaining / 0.22;
+                if (t == 1) revealMotion.Snap(HiddenY);
             }
             slide.Y = revealMotion.Position;
+            if (!Revealed)
+            {
+                if (hideTime >= 0.22) StopRendering();
+                return;
+            }
             ropeMotion.Step(elapsed);
             DrawRope();
             basketMotion.Step(elapsed); basketTurn.Angle = basketMotion.Position;
@@ -669,8 +686,7 @@ namespace ScreenLine
                 card.ScrollWith(scrollVelocity);
                 card.Frame(elapsed, ropeMotion.Position, LineWidth, viewport.HorizontalOffset);
             }
-            if (!Revealed && hideTime >= 0.22) StopRendering();
-            else if (Revealed && !NeedsRendering) StopRendering();
+            if (!NeedsRendering) StopRendering();
         }
 
         bool OverControl(WindowsNative.Point cursor)
@@ -702,6 +718,21 @@ namespace ScreenLine
             bool over = Revealed && OverControl(cursor);
             var now = DateTime.UtcNow;
             bool viewing = ViewingImage(now);
+            bool busy = cards.Values.Any(c => c.Busy);
+            if ((Revealed || nearTop || avoidingCaption) && !busy && !viewing && !ChoosingAppearance && !ChoosingBasket && !ChoosingTexts
+                && WindowsNative.OverCaptionButtons(screen, cursor, Handle))
+            {
+                edgeSince = DateTime.MaxValue; previousDown = down;
+                if (Revealed) { avoidingCaption = true; Reveal(false, false, 0); }
+                return;
+            }
+            if (avoidingCaption && !down && hideTime >= 0.22)
+            {
+                avoidingCaption = false;
+                if (cursor.X >= Display.Bounds.Left && cursor.X < Display.Bounds.Right
+                    && cursor.Y >= Display.WorkingArea.Top && cursor.Y < Display.WorkingArea.Top + 220 * WindowsNative.MonitorScale(Display))
+                    Reveal(true, false, 0);
+            }
             if (!nearTop) suppressEdge = false;
             if (nearTop && down && !previousDown && !over && !viewing)
             {
@@ -722,7 +753,6 @@ namespace ScreenLine
             }
             else edgeSince = DateTime.MaxValue;
             if (WindowsNative.FullScreen(Display, Handle)) { Reveal(false, false, 0); return; }
-            bool busy = cards.Values.Any(c => c.Busy);
             WindowsNative.PassMouse(Handle, !Revealed || (!over && !busy));
             if (!Revealed) return;
             if (!rendering && NeedsRendering) StartRendering();
@@ -799,7 +829,7 @@ namespace ScreenLine
         public int ColorIndex { get; private set; }
         internal double MountX { get { return xMotion.Target; } }
 
-        public ShotCard(CaptureItem item, Action<ShotAction, CaptureItem> act)
+        public ShotCard(CaptureItem item, Action<ShotAction, CaptureItem> act, Gallery gallery, Func<CaptureItem[]> hangingItems)
         {
             Item = item;
             Appearance = LineTheme.All[0];
@@ -830,7 +860,7 @@ namespace ScreenLine
             close.VerticalAlignment = VerticalAlignment.Top;
             close.Focusable = false;
             close.Opacity = 0;
-            close.ToolTip = "删除图片（移到回收站）";
+            close.ToolTip = FileRules.IsInside(item.Path, gallery.Store.Inbox) ? "删除图片（移到回收站）" : "移除记录（保留原文件）";
             close.Click += delegate { act(ShotAction.Trash, item); };
             imageLayer.Children.Add(close);
             Surface.Child = imageLayer;
@@ -877,10 +907,12 @@ namespace ScreenLine
             Surface.MouseMove += Move;
             Surface.LostMouseCapture += delegate { hold.Stop(); pressed = false; };
             hold.Tick += delegate { hold.Stop(); held = true; pressed = false; Surface.ReleaseMouseCapture(); act(ShotAction.Edit, item); };
-            menu = new ImageMenu(delegate(ShotAction action) { act(action, Item); });
+            menu = new ImageMenu(delegate(ShotAction action) { act(action, Item); }, FileRules.IsInside(item.Path, gallery.Store.Inbox));
             Surface.MouseRightButtonUp += delegate(object sender, MouseButtonEventArgs e)
             {
                 e.Handled = true;
+                var hanging = hangingItems();
+                menu.SetBulk(Array.IndexOf(hanging, Item), hanging.Length);
                 menu.PlacementTarget = Surface;
                 WindowsNative.SetForegroundWindow(new WindowInteropHelper(Window.GetWindow(this)).Handle);
                 menu.IsOpen = true;

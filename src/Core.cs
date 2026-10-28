@@ -526,11 +526,58 @@ namespace ScreenLine
             Notify();
         }
 
+        public void RemoveMany(IEnumerable<CaptureItem> items)
+        {
+            var removed = new HashSet<CaptureItem>(items);
+            var previous = Items.ToArray();
+            if (Items.RemoveAll(item => removed.Contains(item)) == 0) return;
+            try { Save(); }
+            catch { Items.Clear(); Items.AddRange(previous); Store.State.Images = Items.Select(i => i.Path).ToList(); throw; }
+            Notify();
+        }
+
         public void Clear()
         {
             Items.Clear();
             Save();
             Notify();
+        }
+
+        public void Forget(CaptureItem item)
+        {
+            int hanging = Items.IndexOf(item), collected = Collected.IndexOf(item);
+            Items.Remove(item);
+            Collected.Remove(item);
+            try { Save(); }
+            catch
+            {
+                if (hanging >= 0) Items.Insert(hanging, item);
+                if (collected >= 0) Collected.Insert(collected, item);
+                Store.State.Images = Items.Select(i => i.Path).ToList();
+                Store.State.Collection = Collected.Select(i => i.Path).ToList();
+                throw;
+            }
+            Notify();
+        }
+
+        public CaptureItem Replace(CaptureItem item, string path)
+        {
+            int hanging = Items.IndexOf(item), collected = Collected.IndexOf(item);
+            if (collected < 0) return null;
+            var copy = new CaptureItem(path, item.Image);
+            if (hanging >= 0) Items[hanging] = copy;
+            Collected[collected] = copy;
+            try { Save(); }
+            catch
+            {
+                if (hanging >= 0) Items[hanging] = item;
+                Collected[collected] = item;
+                Store.State.Images = Items.Select(i => i.Path).ToList();
+                Store.State.Collection = Collected.Select(i => i.Path).ToList();
+                throw;
+            }
+            Notify();
+            return copy;
         }
 
         public void Prune()

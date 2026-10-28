@@ -114,6 +114,7 @@ namespace ScreenLine
             List.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
             List.SetValue(ScrollViewer.CanContentScrollProperty, true);
             VirtualizingPanel.SetIsVirtualizing(List, true); VirtualizingPanel.SetVirtualizationMode(List, VirtualizationMode.Recycling);
+            VirtualizingPanel.SetScrollUnit(List, ScrollUnit.Pixel);
             List.ItemContainerStyle = (Style)XamlReader.Parse(@"<Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='ListBoxItem'>
               <Setter Property='HorizontalContentAlignment' Value='Stretch'/><Setter Property='Padding' Value='0'/><Setter Property='Margin' Value='0'/><Setter Property='Background' Value='Transparent'/>
               <Setter Property='Template'><Setter.Value><ControlTemplate TargetType='ListBoxItem'><Border x:Name='Row' Background='{TemplateBinding Background}' CornerRadius='7'><ContentPresenter/></Border>
@@ -146,10 +147,10 @@ namespace ScreenLine
                 </CheckBox>
                 <StackPanel Margin='28,0,8,0'>
                   <Grid><TextBlock x:Name='Preview' Text='{Binding Content}' TextWrapping='Wrap' TextTrimming='CharacterEllipsis' MaxHeight='44' LineHeight='22' Foreground='#283343'/>
-                  <TextBox x:Name='FullText' Text='{Binding Content, Mode=OneWay}' IsReadOnly='True' TextWrapping='Wrap' MaxHeight='220' VerticalScrollBarVisibility='Auto' BorderThickness='0' Padding='0' Background='Transparent' Foreground='#283343' Visibility='Collapsed'/></Grid>
+                  <TextBox x:Name='FullText' Text='{Binding Content, Mode=OneWay}' IsReadOnly='True' TextWrapping='Wrap' VerticalScrollBarVisibility='Disabled' BorderThickness='0' Padding='0' Background='Transparent' Foreground='#283343' Visibility='Collapsed'/></Grid>
                   <TextBlock Text='{Binding CreatedUtc, Converter={StaticResource TextTime}}' FontSize='11' Foreground='#8390A1' Margin='0,5,0,0'/>
                 </StackPanel>
-                <StackPanel Grid.Column='1' Orientation='Horizontal' VerticalAlignment='Center'>
+                <StackPanel Grid.Column='1' Orientation='Horizontal' VerticalAlignment='Top'>
                   <Button Tag='copy' ToolTip='复制' AutomationProperties.Name='复制文字' Style='{StaticResource IconButton}' Margin='0,0,4,0'><Viewbox Width='16' Height='16'><Path Data='{StaticResource CopyIcon}' Stroke='{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}' StrokeThickness='1.65' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round'/></Viewbox></Button>
                   <Button Tag='delete' ToolTip='删除' AutomationProperties.Name='删除文字' Style='{StaticResource IconButton}'><Viewbox Width='16' Height='16'><Path Data='{StaticResource TrashIcon}' Stroke='{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}' StrokeThickness='1.65' StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round'/></Viewbox></Button>
                 </StackPanel>
@@ -172,6 +173,8 @@ namespace ScreenLine
 
             feedbackTimer.Tick += delegate { feedback.Text = ""; feedbackTimer.Stop(); };
             SourceInitialized += delegate { Position(); };
+            Loaded += delegate { Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(Position)); };
+            DpiChanged += delegate { Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(Position)); };
             shelf.SizeChanged += ShelfMoved; shelf.LocationChanged += ShelfMoved; shelf.RopeHidden += Close;
             Deactivated += delegate { if (IsVisible) Close(); };
             PreviewKeyDown += delegate(object sender, KeyEventArgs e) { if (e.Key == Key.Escape) { e.Handled = true; Close(); } };
@@ -184,6 +187,7 @@ namespace ScreenLine
 
         internal void Position()
         {
+            if (closed) return;
             var area = shelf.Display.WorkingArea;
             double dpi = WindowsNative.MonitorScale(shelf.Display);
             var anchor = shelf.TextAnchor;

@@ -26,6 +26,10 @@ namespace ScreenLine
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder name, int length);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int length);
         [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+        delegate bool WindowEnumerator(IntPtr window, IntPtr parameter);
+        [DllImport("user32.dll")] static extern bool EnumWindows(WindowEnumerator callback, IntPtr parameter);
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
+        [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size);
         [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr window, int index);
         [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr window, int index, int value);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool SetProp(IntPtr window, string name, IntPtr value);
@@ -101,6 +105,39 @@ namespace ScreenLine
             int before = GetWindowLong(window, -20);
             int after = pass ? before | 0x20 : before & ~0x20;
             if (after != before) SetWindowLong(window, -20, after);
+        }
+
+        public static bool OverCaptionButtons(Forms.Screen screen, Point cursor, IntPtr overlay)
+        {
+            double scale = MonitorScale(screen);
+            var bounds = screen.Bounds;
+            var work = screen.WorkingArea;
+            if (cursor.X < Math.Min(bounds.Right, work.Right) - 150 * scale || cursor.X >= bounds.Right
+                || cursor.Y < bounds.Top || cursor.Y >= Math.Max(bounds.Top, work.Top) + 40 * scale) return false;
+            Rectangle rect = new Rectangle();
+            bool found = false;
+            EnumWindows(delegate(IntPtr window, IntPtr parameter)
+            {
+                if (window == overlay || window == GetShellWindow() || !IsWindowVisible(window) || IsIconic(window)
+                    || (GetWindowLong(window, -20) & 0x20) != 0) return true;
+                int cloaked;
+                if (DwmGetWindowAttribute(window, 14, out cloaked, sizeof(int)) == 0 && cloaked != 0) return true;
+                Rectangle candidate;
+                if (!GetWindowRect(window, out candidate) || cursor.X < candidate.Left || cursor.X >= candidate.Right
+                    || cursor.Y < candidate.Top || cursor.Y >= candidate.Bottom) return true;
+                var name = new StringBuilder(128);
+                GetClassName(window, name, name.Capacity);
+                string type = name.ToString();
+                if (type == "WorkerW" || type == "Progman" || type.StartsWith("Shell_")) return true;
+                rect = candidate; found = true;
+                return false;
+            }, IntPtr.Zero);
+            if (!found) return false;
+            if (rect.Left > work.Left || rect.Top > work.Top || rect.Right < work.Right || rect.Bottom < work.Bottom) return false;
+            if (rect.Right > bounds.Right + 16 * scale || rect.Right <= bounds.Left || rect.Top >= bounds.Bottom
+                || rect.Right - rect.Left < 280 * scale || rect.Bottom - rect.Top < 80 * scale) return false;
+            double right = Math.Min(rect.Right, bounds.Right), top = Math.Max(rect.Top, bounds.Top);
+            return cursor.X >= right - 150 * scale && cursor.X < right && cursor.Y >= top && cursor.Y < top + 40 * scale;
         }
 
         public static bool FullScreen(Forms.Screen screen, IntPtr overlay)

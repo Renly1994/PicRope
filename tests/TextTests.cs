@@ -131,7 +131,12 @@ namespace ScreenLine.Tests
             window.List.SelectedItem = longItem; window.UpdateLayout();
             var longRow = (ListBoxItem)window.List.ItemContainerGenerator.ContainerFromIndex(0);
             var reader = Children<TextBox>(longRow).Single();
-            Check(reader.IsVisible && reader.ActualHeight <= 220.1 && reader.Text == longItem.Content, "选中长文字可在行内滚动阅读，不撑坏整个面板");
+            Check(reader.IsVisible && reader.ActualHeight > 220 && reader.Text == longItem.Content
+                && reader.VerticalScrollBarVisibility == ScrollBarVisibility.Disabled, "选中长文字保留原文，使用列表滚动避免双滚动条");
+            Export("长文字展开", shelf, window);
+            var longScroll = Children<ScrollViewer>(window.List).First();
+            longScroll.ScrollToVerticalOffset(200); await Task.Delay(100);
+            Check(longScroll.VerticalOffset > 0, "长文字可以在列表内连续滚动阅读");
 
             controller.Texts.Remove(longItem);
             controller.Texts.Add("会议链接和参考资料：https://example.com/notes");
@@ -166,6 +171,8 @@ namespace ScreenLine.Tests
             }
 
             window.Close();
+            var pointerBeforeHover = WindowsNative.Cursor();
+            SetCursorPos(shelf.Display.WorkingArea.Left + 20, shelf.Display.WorkingArea.Bottom - 20);
             var envelopeIcon = Children<EnvelopeIcon>(shelf.TextButton).Single();
             foreach (var theme in LineTheme.All)
             {
@@ -203,7 +210,6 @@ namespace ScreenLine.Tests
             shelf.TextButton.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = Mouse.MouseLeaveEvent });
             Check(envelopeIcon.Expansion == beforeReverse, "快速移入移出时，信纸位置连续，不跳回起点");
             await Task.Delay(450);
-            var pointerBeforeHover = WindowsNative.Cursor();
             try
             {
                 var target = envelopeIcon.PointToScreen(new Point(envelopeIcon.ActualWidth / 2, envelopeIcon.ActualHeight / 2));

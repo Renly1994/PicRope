@@ -145,13 +145,34 @@ namespace ScreenLine.Tests
             string label = name + " " + scale * 100 + "%：";
             Check(shelf.Display == main, label + "从主屏启动");
             Pointer = new WindowsNative.Point { X = bounds.Left + bounds.Width / 2, Y = bounds.Top + 200 };
+            shelf.Height = 110;
             shelf.Toggle();
             Check(shelf.Revealed && shelf.Display == secondary, label + "收起状态下调用快捷键入口，在副屏展开");
             var positioned = Positions[shelf.Handle];
             Check(positioned.Left == work.Left && positioned.Top == work.Top && positioned.Right - positioned.Left == work.Width
                 && positioned.Bottom - positioned.Top == (int)Math.Round(220 * scale)
-                && Math.Abs(shelf.Width - work.Width / scale) < 0.01,
-                label + "副屏坐标、工作区与缩放换算正确");
+                && Math.Abs(shelf.Width - work.Width / scale) < 0.01 && Math.Abs(shelf.Height - 220) < 0.01,
+                label + "副屏坐标、工作区与缩放换算正确：" + positioned.Left + "," + positioned.Top + "," + (positioned.Right - positioned.Left) + "×" + (positioned.Bottom - positioned.Top) + "，WPF " + shelf.Width + "×" + shelf.Height);
+            if (scenarios == 1 || scenarios == 4)
+            {
+                var textWindow = new TextWindow(new TextCollection(gallery.Store), shelf) { ShowActivated = false, Opacity = 0 };
+                textWindow.SourceInitialized += delegate { textWindow.Width = 230; textWindow.Height = 228; };
+                textWindow.Show();
+                await Task.Delay(100);
+                var textHandle = new WindowInteropHelper(textWindow).Handle;
+                WindowsNative.Rectangle textBounds;
+                Check(Positions.TryGetValue(textHandle, out textBounds) && Math.Abs(textWindow.Width - 460) < 0.01
+                    && textBounds.Right - textBounds.Left == (int)Math.Round(460 * scale),
+                    label + "文字面板加载后恢复目标屏幕的尺寸");
+                textWindow.Width = 230; textWindow.Height = 228;
+                var constructor = typeof(DpiChangedEventArgs).GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)[0];
+                var dpiChange = (RoutedEventArgs)constructor.Invoke(new object[] {
+                    new System.Windows.DpiScale(2, 2), new System.Windows.DpiScale(scale, scale), Window.DpiChangedEvent, textWindow });
+                textWindow.RaiseEvent(dpiChange); await Task.Delay(100);
+                Check(Math.Abs(textWindow.Width - 460) < 0.01 && Positions[textHandle].Right - Positions[textHandle].Left == (int)Math.Round(460 * scale),
+                    label + "文字面板收到缩放变化后恢复目标尺寸");
+                textWindow.Close();
+            }
             shelf.Toggle();
             Check(!shelf.Revealed, label + "再次调用快捷键入口收起");
             await Task.Delay(70);
@@ -272,7 +293,7 @@ namespace ScreenLine.Tests
         static void Check(bool condition, string message)
         {
             checks++;
-            if (!condition) failures.Add(message);
+            if (!condition) { failures.Add(message); Console.WriteLine("未通过：" + message); }
         }
     }
 }

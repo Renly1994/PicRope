@@ -24,6 +24,8 @@ namespace ScreenLine.Tests
         static WindowsNative.Point pointer;
         static IntPtr focus;
         [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+        [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(WindowsNative.Point point);
+        [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr window, int flags);
         [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
         [DllImport("user32.dll")] static extern bool PostMessage(IntPtr window, int message, IntPtr w, IntPtr l);
         [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
@@ -73,16 +75,112 @@ namespace ScreenLine.Tests
             var store = new StateStore(Path.Combine(root, "profile"));
             controller = new DesktopController(store, Path.Combine(root, "watched"), false);
             await controller.Start(); controller.Shelf.Capturing = true; controller.Shelf.Reveal(true, true, 60);
+            string original = Path.Combine(root, "本地原图.png");
+            File.WriteAllBytes(original, ImageContent.EncodeClipboard(Pattern(40, 30)));
+            Check(await controller.Captures.Import(original, null, false), "可以添加本地图片");
+            var imported = controller.Gallery.Items.Single();
+            Check(FileRules.IsInside(imported.Path, store.Inbox) && !FileRules.SameFile(original, imported.Path), "添加本地图片时收集副本");
+            controller.Act(ShotAction.Trash, imported);
+            Check(File.Exists(original) && !File.Exists(imported.Path), "删除导入图片只删除副本");
+            controller.Gallery.Add(original, ImageContent.Read(original));
+            var legacy = controller.Gallery.Items.Single();
+            controller.Act(ShotAction.Trash, legacy);
+            Check(File.Exists(original) && !controller.Gallery.Collected.Contains(legacy), "删除旧版外部图片记录时保留原图");
+            controller.Gallery.Add(original, ImageContent.Read(original));
+            controller.Act(ShotAction.Edit, controller.Gallery.Items.Single());
+            for (int i = 0; i < 60 && controller.Editors.Count == 0; i++) await Task.Delay(50);
+            Check(controller.Editors.Count == 1 && FileRules.IsInside(controller.Editors[0].ImagePath, store.Inbox)
+                && File.Exists(original), "编辑旧版外部图片前创建副本");
+            controller.Editors[0].CloseWithoutPrompt();
+            controller.Act(ShotAction.Trash, controller.Gallery.Items.Single());
+            Check(File.Exists(original), "编辑后的副本删除时保留原图");
+            var bulk = new List<CaptureItem>();
+            for (int i = 0; i < 3; i++)
+            {
+                string path = Path.Combine(root, "批量" + i + ".png");
+                File.WriteAllBytes(path, ImageContent.EncodeClipboard(Pattern(40, 30)));
+                controller.Gallery.Add(path, ImageContent.Read(path));
+                bulk.Add(controller.Gallery.Items.Last());
+            }
+            controller.Shelf.CardFor(bulk[0].Path).Detached = true;
+            controller.Act(ShotAction.RemoveAll, bulk[1]);
+            Check(controller.Gallery.Items.SequenceEqual(new[] { bulk[0] }), "批量取下不影响已取下的桌面贴图");
+            controller.Shelf.CardFor(bulk[0].Path).Detached = false;
+            controller.Gallery.Clear(); foreach (var item in bulk) controller.Gallery.Add(item.Path, item.Image);
+            controller.Act(ShotAction.RemoveLeft, bulk[1]);
+            Check(controller.Gallery.Items.SequenceEqual(bulk.Skip(1)) && File.Exists(bulk[0].Path), "批量取下左侧保留原文件和其余图片");
+            controller.Gallery.Clear(); foreach (var item in bulk) controller.Gallery.Add(item.Path, item.Image);
+            controller.Act(ShotAction.RemoveRight, bulk[1]);
+            Check(controller.Gallery.Items.SequenceEqual(bulk.Take(2)) && File.Exists(bulk[2].Path), "批量取下右侧保留原文件和其余图片");
+            controller.Gallery.Clear(); foreach (var item in bulk) controller.Gallery.Add(item.Path, item.Image);
+            controller.Act(ShotAction.RemoveOthers, bulk[1]);
+            Check(controller.Gallery.Items.SequenceEqual(new[] { bulk[1] }) && bulk.All(item => controller.Gallery.Collected.Contains(item)), "仅保留当前图片，其余保留在篮子");
+            controller.Act(ShotAction.RemoveAll, bulk[1]);
+            Check(controller.Gallery.Items.Count == 0 && bulk.All(item => File.Exists(item.Path)), "批量取下全部不删除文件");
+            foreach (var item in bulk) controller.Gallery.Forget(item);
+            controller.Shelf.Capturing = true; controller.Shelf.Reveal(true, true, 60);
             await Task.Delay(300);
             Check(!controller.Shelf.BasketButton.IsVisible && !controller.Shelf.TextButton.IsVisible, "两项关闭时隐藏全部挂件");
             controller.TrayMenu.Pictures.IsChecked = true; await Task.Delay(40);
             Check(controller.Shelf.BasketButton.IsVisible && !controller.Shelf.TextButton.IsVisible, "仅开启图片时只显示篮子");
             controller.TrayMenu.Text.IsChecked = true; await Task.Delay(40);
             Check(controller.Shelf.BasketButton.IsVisible && controller.Shelf.TextButton.IsVisible, "两项开启时显示两个挂件");
+            controller.Shelf.UpdateLayout();
+            var basketBounds = controller.Shelf.BasketButton.TransformToAncestor(controller.Shelf).TransformBounds(new Rect(controller.Shelf.BasketButton.RenderSize));
+            var textBounds = controller.Shelf.TextButton.TransformToAncestor(controller.Shelf).TransformBounds(new Rect(controller.Shelf.TextButton.RenderSize));
+            double rightGap = controller.Shelf.ActualWidth - Math.Max(basketBounds.Right, textBounds.Right);
+            Check(rightGap >= 29 && rightGap <= 31, "篮子恢复原来的靠右位置");
+            var rope = (System.Windows.Shapes.Path)typeof(ShelfWindow).GetField("rope", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(controller.Shelf);
+            var curve = (PathGeometry)rope.Data;
+            var start = rope.TransformToAncestor(controller.Shelf).Transform(curve.Figures[0].StartPoint);
+            var end = rope.TransformToAncestor(controller.Shelf).Transform(((QuadraticBezierSegment)curve.Figures[0].Segments[0]).Point2);
+            Check(Math.Abs(start.X - 24) < 1 && Math.Abs(controller.Shelf.ActualWidth - end.X - 24) < 1,
+                "避让窗口按钮时绳子仍延伸到屏幕两端");
+            var backdrop = new Window { Title = "窗口控制按钮验证", WindowState = WindowState.Maximized, ShowInTaskbar = false };
+            backdrop.Show(); backdrop.Activate(); controller.Shelf.Capturing = false;
+            var area = controller.Shelf.Display.WorkingArea;
+            double scale = WindowsNative.MonitorScale(controller.Shelf.Display);
+            foreach (int offset in new[] { 23, 69, 115 })
+            {
+                var caption = new WindowsNative.Point { X = area.Right - (int)Math.Round(offset * scale), Y = area.Top + (int)Math.Round(16 * scale) };
+                SetCursorPos(caption.X, caption.Y); await Task.Delay(160);
+                Check(!controller.Shelf.Revealed, "指向窗口控制按钮时临时收起绳子");
+                Check(GetAncestor(WindowFromPoint(caption), 2) == new System.Windows.Interop.WindowInteropHelper(backdrop).Handle,
+                    "右上角窗口控制按钮区域可正常点击");
+            }
+            SetCursorPos(area.Right - (int)Math.Round(115 * scale), area.Top + (int)Math.Round(16 * scale));
+            mouse_event(2, 0, 0, 0, UIntPtr.Zero); mouse_event(4, 0, 0, 0, UIntPtr.Zero); await Task.Delay(200);
+            Check(backdrop.WindowState == WindowState.Minimized, "避让后实际点击最小化按钮生效");
+            backdrop.WindowState = WindowState.Maximized; backdrop.Activate();
+            SetCursorPos(area.Right - (int)Math.Round(80 * scale), area.Top + (int)Math.Round(160 * scale));
+            await Task.Delay(450);
+            Check(controller.Shelf.Revealed, "移出控制按钮区域后恢复展开，仍能接近篮子");
+            Point basketPoint = controller.Shelf.BasketButton.PointToScreen(new Point(controller.Shelf.BasketButton.ActualWidth / 2, 90));
+            SetCursorPos((int)basketPoint.X, (int)basketPoint.Y); await Task.Delay(160);
+            mouse_event(2, 0, 0, 0, UIntPtr.Zero); mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+            await Task.Delay(150);
+            Check(controller.Basket != null && controller.Basket.IsVisible, "从下方接近时仍可实际点击篮子");
+            controller.Basket.Close();
+            backdrop.WindowState = WindowState.Normal;
+            var backdropHandle = new System.Windows.Interop.WindowInteropHelper(backdrop).Handle;
+            WindowsNative.SetWindowPos(backdropHandle, IntPtr.Zero, area.Left + 300, area.Top + 60, 1000, 700, 0x14);
+            backdrop.Activate(); await Task.Delay(150);
+            WindowsNative.Rectangle normalBounds;
+            Check(WindowsNative.GetWindowRect(backdropHandle, out normalBounds), "读取非最大化窗口的位置");
+            var normalCaption = new WindowsNative.Point { X = normalBounds.Right - (int)Math.Round(23 * scale), Y = normalBounds.Top + (int)Math.Round(16 * scale) };
+            SetCursorPos(normalCaption.X, normalCaption.Y); await Task.Delay(180);
+            Check(controller.Shelf.Revealed && !WindowsNative.OverCaptionButtons(controller.Shelf.Display, normalCaption, controller.Shelf.Handle),
+                "普通窗口右上角不触发避让");
+            backdrop.Close(); controller.Shelf.Capturing = true;
+            controller.Shelf.Reveal(true, true, 60);
             var before = controller.Shelf.TextButton.PointToScreen(new Point());
             controller.TrayMenu.Pictures.IsChecked = false; await Task.Delay(40);
             var after = controller.Shelf.TextButton.PointToScreen(new Point());
             Check(!controller.Shelf.BasketButton.IsVisible && controller.Shelf.TextButton.IsVisible && after.X > before.X + 100, "仅文字开启时信封向右补位");
+            controller.Shelf.UpdateLayout();
+            textBounds = controller.Shelf.TextButton.TransformToAncestor(controller.Shelf).TransformBounds(new Rect(controller.Shelf.TextButton.RenderSize));
+            Check(controller.Shelf.ActualWidth - textBounds.Right >= 31 && controller.Shelf.ActualWidth - textBounds.Right <= 33,
+                "单独显示信封时恢复原来的靠右位置");
             controller.TrayMenu.Pictures.IsChecked = true;
             var content = Pattern(900, 600);
             for (int i = 0; i < 3; i++)
@@ -226,7 +324,8 @@ namespace ScreenLine.Tests
             double scale = WindowsNative.MonitorScale(WindowsNative.ScreenAtPointer());
             var a = capture.PointToScreen(new Point(from.X / scale, from.Y / scale));
             var b = capture.PointToScreen(new Point(to.X / scale, to.Y / scale));
-            SetCursorPos((int)a.X, (int)a.Y); await Task.Delay(30); mouse_event(2, 0, 0, 0, UIntPtr.Zero); await Task.Delay(30);
+            SetCursorPos((int)a.X, (int)a.Y); await Task.Delay(80);
+            mouse_event(2, 0, 0, 0, UIntPtr.Zero); await Task.Delay(30);
             for (int i = 1; i <= 8; i++) { SetCursorPos((int)(a.X + (b.X - a.X) * i / 8), (int)(a.Y + (b.Y - a.Y) * i / 8)); await Task.Delay(16); }
             mouse_event(4, 0, 0, 0, UIntPtr.Zero); await Task.Delay(40);
         }

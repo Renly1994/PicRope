@@ -1,4 +1,4 @@
-param([switch]$DesktopTests, [switch]$FolderTests, [switch]$MenuTests, [switch]$EditorTests, [switch]$ThemeTests, [switch]$WindTests, [switch]$BasketTests, [switch]$ScrollTests, [switch]$BasketAppearanceTests, [switch]$BasketMotionTests, [switch]$UpdateTests, [switch]$TextTests, [switch]$EnvelopeMotionTests, [switch]$MonitorTests, [switch]$ReleaseTests, [switch]$BasketLayoutTests, [switch]$BuildOnly, [switch]$Package)
+param([switch]$DesktopTests, [switch]$VisibilityTests, [switch]$FolderTests, [switch]$MenuTests, [switch]$EditorTests, [switch]$ThemeTests, [switch]$WindTests, [switch]$BasketTests, [switch]$ScrollTests, [switch]$BasketAppearanceTests, [switch]$BasketMotionTests, [switch]$UpdateTests, [switch]$TextTests, [switch]$EnvelopeMotionTests, [switch]$MonitorTests, [switch]$ReleaseTests, [switch]$BasketLayoutTests, [switch]$BuildOnly, [switch]$Package)
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $frameworkPath = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
@@ -39,19 +39,20 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'vendor\WebView2\LICENSE.txt'),(J
 Copy-Item -LiteralPath (Join-Path $projectRoot 'vendor\WebView2\Microsoft.Web.WebView2.Core.dll'),(Join-Path $projectRoot 'vendor\WebView2\Microsoft.Web.WebView2.Wpf.dll'),(Join-Path $projectRoot 'vendor\WebView2\WebView2Loader.dll') -Destination $buildPath
 Write-Output ('构建完成：' + (Join-Path $buildPath 'PicRope.exe'))
 
-if (-not $BuildOnly -and -not ($FolderTests -or $MenuTests -or $EditorTests -or $ThemeTests -or $WindTests -or $EnvelopeMotionTests) -and (Test-Path -LiteralPath (Join-Path $projectRoot 'tests\CoreTests.cs'))) {
+if (-not $BuildOnly -and -not ($VisibilityTests -or $FolderTests -or $MenuTests -or $EditorTests -or $ThemeTests -or $WindTests -or $EnvelopeMotionTests -or $ReleaseTests -or $MonitorTests -or $TextTests -or $UpdateTests) -and (Test-Path -LiteralPath (Join-Path $projectRoot 'tests\CoreTests.cs'))) {
     & $compilerPath /nologo /target:exe /codepage:65001 "/out:$buildPath\CoreTests.exe" /main:ScreenLine.Tests.CoreTests $references (Join-Path $projectRoot 'src\Core.cs') (Join-Path $projectRoot 'src\SpringMotion.cs') (Join-Path $projectRoot 'tests\CoreTests.cs')
     if ($LASTEXITCODE -ne 0) { throw '核心测试构建失败' }
     & (Join-Path $buildPath 'CoreTests.exe')
     if ($LASTEXITCODE -ne 0) { throw '核心测试未通过' }
 }
 
-if ($DesktopTests -or $MenuTests -or $EditorTests -or $ThemeTests -or $WindTests -or $BasketTests -or $ScrollTests -or $BasketAppearanceTests -or $BasketMotionTests) {
+if ($DesktopTests -or $VisibilityTests -or $MenuTests -or $EditorTests -or $ThemeTests -or $WindTests -or $BasketTests -or $ScrollTests -or $BasketAppearanceTests -or $BasketMotionTests) {
     $desktopReferences = $references + @("/r:$frameworkPath\WPF\UIAutomationClient.dll", "/r:$frameworkPath\WPF\UIAutomationTypes.dll", "/r:$frameworkPath\WPF\UIAutomationProvider.dll")
     & $compilerPath /nologo /target:exe /platform:x64 /codepage:65001 "/out:$buildPath\DesktopTests.exe" /main:ScreenLine.Tests.DesktopTests "/win32manifest:$manifestPath" "/win32icon:$iconPath" "/resource:$iconPath,PicRope.Icon" $basketResources $desktopReferences $sources (Join-Path $projectRoot 'tests\DesktopTests.cs')
     if ($LASTEXITCODE -ne 0) { throw '桌面测试构建失败' }
     Copy-Item -LiteralPath (Join-Path $projectRoot 'src\App.config') -Destination (Join-Path $buildPath 'DesktopTests.exe.config')
-    if ($BasketMotionTests) { & (Join-Path $buildPath 'DesktopTests.exe') --basket-motion }
+    if ($VisibilityTests) { & (Join-Path $buildPath 'DesktopTests.exe') --caption-motion }
+    elseif ($BasketMotionTests) { & (Join-Path $buildPath 'DesktopTests.exe') --basket-motion }
     elseif ($BasketAppearanceTests) { & (Join-Path $buildPath 'DesktopTests.exe') --basket-appearance }
     elseif ($ScrollTests) { & (Join-Path $buildPath 'DesktopTests.exe') --scroll-bounds }
     elseif ($BasketTests) { & (Join-Path $buildPath 'DesktopTests.exe') --basket }

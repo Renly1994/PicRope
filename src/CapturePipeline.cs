@@ -163,11 +163,18 @@ namespace ScreenLine
         public async Task<bool> Import(string path, CaptureSource? source, bool announce)
         {
             if (source.HasValue ? gallery.Collected.Any(i => FileRules.SameFile(i.Path, path)) : gallery.Contains(path)) return true;
+            string copy = null;
             try
             {
                 ImageContent image = await Task.Run(() => ImageContent.Read(path));
                 if (disposed) return false;
                 if (source.HasValue && !receipts.Accept(image.Fingerprint, source.Value, DateTime.UtcNow)) return true;
+                if (!source.HasValue && !FileRules.IsInside(path, gallery.Store.Inbox))
+                {
+                    copy = await Task.Run(() => CopyToInbox(path));
+                    if (disposed) return false;
+                    path = copy;
+                }
                 if (source.HasValue && !AutoHang) gallery.Collect(path, image);
                 else
                 {
@@ -183,6 +190,20 @@ namespace ScreenLine
             catch (IOException) { return false; }
             catch (NotSupportedException) { return false; }
             catch (UnauthorizedAccessException) { return false; }
+            finally
+            {
+                if (copy != null && !gallery.Collected.Any(i => FileRules.SameFile(i.Path, copy)) && File.Exists(copy)) File.Delete(copy);
+            }
+        }
+
+        public string CopyToInbox(string path)
+        {
+            Directory.CreateDirectory(gallery.Store.Inbox);
+            string name = Path.GetFileNameWithoutExtension(path) + "_" + Guid.NewGuid().ToString("N").Substring(0, 8) + Path.GetExtension(path);
+            string copy = Path.Combine(gallery.Store.Inbox, name);
+            try { File.Copy(path, copy); }
+            catch { if (File.Exists(copy)) File.Delete(copy); throw; }
+            return copy;
         }
 
         public void Hang(CaptureItem item)

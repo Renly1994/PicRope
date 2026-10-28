@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,9 +19,9 @@ using Forms = System.Windows.Forms;
 [assembly: AssemblyTitle("PicRope · 图绳")]
 [assembly: AssemblyProduct("PicRope")]
 [assembly: AssemblyDescription("图绳：把截图挂在屏幕上沿，随手复制、拖拽和保存。")]
-[assembly: AssemblyVersion("1.2.0.0")]
-[assembly: AssemblyFileVersion("1.2.0.0")]
-[assembly: AssemblyInformationalVersion("1.2.0")]
+[assembly: AssemblyVersion("1.2.1.0")]
+[assembly: AssemblyFileVersion("1.2.1.0")]
+[assembly: AssemblyInformationalVersion("1.2.1")]
 
 namespace ScreenLine
 {
@@ -359,6 +360,19 @@ namespace ScreenLine
                 if (!File.Exists(item.Path)) { Gallery.Prune(); return; }
                 switch (action)
                 {
+                    case ShotAction.RemoveLeft:
+                    case ShotAction.RemoveRight:
+                    case ShotAction.RemoveOthers:
+                    case ShotAction.RemoveAll:
+                        var hanging = Shelf.HangingItems();
+                        int index = Array.IndexOf(hanging, item);
+                        if (index < 0) break;
+                        var targets = hanging.Where((image, position) => action == ShotAction.RemoveAll
+                            || action == ShotAction.RemoveLeft && position < index
+                            || action == ShotAction.RemoveRight && position > index
+                            || action == ShotAction.RemoveOthers && position != index).ToArray();
+                        Gallery.RemoveMany(targets);
+                        break;
                     case ShotAction.Copy:
                         var payload = new DataObject();
                         byte[] png;
@@ -385,6 +399,17 @@ namespace ScreenLine
                             existing.Present();
                             break;
                         }
+                        if (!FileRules.IsInside(item.Path, Gallery.Store.Inbox))
+                        {
+                            string copy = await Task.Run(() => Captures.CopyToInbox(item.Path));
+                            try
+                            {
+                                var replacement = Gallery.Replace(item, copy);
+                                if (replacement == null) { File.Delete(copy); break; }
+                                item = replacement;
+                            }
+                            catch { File.Delete(copy); throw; }
+                        }
                         var window = new ImageEditorWindow(item.Path, Gallery.Store, RefreshEditedImage, Captures.IgnoreCurrentClipboard);
                         Editors.Add(window);
                         window.Closed += delegate
@@ -407,10 +432,13 @@ namespace ScreenLine
                         Gallery.Remove(item);
                         break;
                     case ShotAction.Trash:
-                        FileSystem.DeleteFile(item.Path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
-                        Shelf.ShowDiscard(item);
-                        Gallery.Remove(item);
-                        Gallery.Prune();
+                        if (FileRules.IsInside(item.Path, Gallery.Store.Inbox))
+                        {
+                            FileSystem.DeleteFile(item.Path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
+                            Shelf.ShowDiscard(item);
+                            Gallery.Prune();
+                        }
+                        else { Shelf.ShowDiscard(item); Gallery.Forget(item); }
                         break;
                 }
             }

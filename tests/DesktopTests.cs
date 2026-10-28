@@ -54,7 +54,7 @@ namespace ScreenLine.Tests
             };
             application.Startup += async delegate
             {
-                try { await Run(arguments.Contains("--visibility"), arguments.Contains("--menus"), arguments.Contains("--editor"), arguments.Contains("--discard"), arguments.Contains("--shelf-motion"), arguments.Contains("--pins"), arguments.Contains("--themes"), arguments.Contains("--copied"), arguments.Contains("--wind"), arguments.Contains("--basket"), arguments.Contains("--scroll-bounds"), arguments.Contains("--basket-appearance"), arguments.Contains("--basket-motion")); Console.WriteLine("桌面测试：{0} 项通过", checks); }
+                try { await Run(arguments.Contains("--caption-motion"), arguments.Contains("--visibility"), arguments.Contains("--menus"), arguments.Contains("--editor"), arguments.Contains("--discard"), arguments.Contains("--shelf-motion"), arguments.Contains("--pins"), arguments.Contains("--themes"), arguments.Contains("--copied"), arguments.Contains("--wind"), arguments.Contains("--basket"), arguments.Contains("--scroll-bounds"), arguments.Contains("--basket-appearance"), arguments.Contains("--basket-motion")); Console.WriteLine("桌面测试：{0} 项通过", checks); }
                 catch (Exception error) { Console.WriteLine("桌面测试失败：" + error); Environment.ExitCode = 1; }
                 if (!passiveInput) mouse_event(4, 0, 0, 0, UIntPtr.Zero);
                 try
@@ -74,7 +74,7 @@ namespace ScreenLine.Tests
             application.Run();
         }
 
-        static async Task Run(bool visibilityOnly, bool menusOnly, bool editorOnly, bool discardOnly, bool shelfMotionOnly, bool pinsOnly, bool themesOnly, bool copiedOnly, bool windOnly, bool basketOnly, bool scrollOnly, bool basketAppearanceOnly, bool basketMotionOnly)
+        static async Task Run(bool captionMotionOnly, bool visibilityOnly, bool menusOnly, bool editorOnly, bool discardOnly, bool shelfMotionOnly, bool pinsOnly, bool themesOnly, bool copiedOnly, bool windOnly, bool basketOnly, bool scrollOnly, bool basketAppearanceOnly, bool basketMotionOnly)
         {
             CheckCaptureTimes();
             previousPointer = WindowsNative.Cursor();
@@ -103,6 +103,7 @@ namespace ScreenLine.Tests
             var store = new StateStore(Path.Combine(root, "profile"));
             controller = new DesktopController(store, watched, false);
             await controller.Start();
+            if (captionMotionOnly) { await CheckCaptionMotion(); return; }
             if (basketMotionOnly) { await CheckBasketMotion(store); return; }
             if (basketAppearanceOnly) { await CheckBasketAppearance(store); return; }
             if (scrollOnly) { await CheckScrollBoundaries(store); return; }
@@ -373,6 +374,15 @@ namespace ScreenLine.Tests
             delete.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(controller.Gallery.Collected.Count == 0 && basket.VisibleCount == 0 && basket.Preview.Source == null,
                 "删除最后一批图片后显示空篮子并清空预览");
+            string original = Path.Combine(store.Root, "旧版外部图片.png"), copy = Path.Combine(store.Inbox, "收集副本.png");
+            File.WriteAllBytes(original, bytes); File.WriteAllBytes(copy, bytes);
+            controller.Gallery.Collect(original, ImageContent.Read(original));
+            controller.Gallery.Collect(copy, ImageContent.Read(copy));
+            basket.ChoiceFor(original).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            basket.ChoiceFor(copy).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            delete.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(File.Exists(original) && !File.Exists(copy) && controller.Gallery.Collected.Count == 0,
+                "混合批量删除时保留外部原图并删除收集副本");
         }
 
         static async Task CheckBasketSelection(StateStore store)
@@ -1141,6 +1151,81 @@ namespace ScreenLine.Tests
             await CheckViewerClose();
         }
 
+        static async Task CheckCaptionMotion()
+        {
+            var shelf = controller.Shelf;
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var slide = (TranslateTransform)typeof(ShelfWindow).GetField("slide", flags).GetValue(shelf);
+            var clock = (System.Diagnostics.Stopwatch)typeof(ShelfWindow).GetField("clock", flags).GetValue(shelf);
+            var lastFrame = typeof(ShelfWindow).GetField("lastFrame", flags);
+            var frame = typeof(ShelfWindow).GetMethod("RenderFrame", flags);
+            var tick = typeof(ShelfWindow).GetMethod("Tick", flags);
+            var backdrop = new Window { Title = "收起动效验证", WindowState = WindowState.Maximized, ShowInTaskbar = false };
+            try
+            {
+                string path = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "docs", "assets", "rope-preview.png"));
+                controller.Gallery.Add(path, ImageContent.Read(path));
+                controller.TrayMenu.Pictures.IsChecked = true; controller.TrayMenu.Text.IsChecked = true;
+                backdrop.Show(); backdrop.Activate();
+                shelf.Reveal(true, true, 60); await Task.Delay(500);
+                WindowsNative.ActivateEditor(new System.Windows.Interop.WindowInteropHelper(backdrop).Handle);
+                var area = shelf.Display.WorkingArea;
+                double scale = WindowsNative.MonitorScale(shelf.Display);
+                SetCursorPos(area.Right - (int)Math.Round(23 * scale), area.Top + (int)Math.Round(16 * scale));
+                tick.Invoke(shelf, new object[] { null, EventArgs.Empty });
+                Check(!shelf.Revealed, "最大化窗口右上角触发避让");
+                double start = slide.Y;
+                lastFrame.SetValue(shelf, clock.Elapsed.TotalSeconds - 0.04);
+                frame.Invoke(shelf, new object[] { null, EventArgs.Empty });
+                Check(slide.Y < start - 55, "避让时收起动作立即平滑启动");
+                SetCursorPos(area.Right - (int)Math.Round(80 * scale), area.Top + (int)Math.Round(160 * scale));
+                tick.Invoke(shelf, new object[] { null, EventArgs.Empty });
+                Check(!shelf.Revealed, "快速移出按钮区域时先完成收起再展开");
+                lastFrame.SetValue(shelf, clock.Elapsed.TotalSeconds - 0.23);
+                frame.Invoke(shelf, new object[] { null, EventArgs.Empty });
+                Check(slide.Y <= -299.9, "收起结束后所有内容完全移出屏幕");
+                var card = shelf.CardFor(path);
+                Check(new FrameworkElement[] { card.Surface, card.Grip, shelf.BasketButton, shelf.TextButton }
+                    .All(element => element.TransformToAncestor(shelf).TransformBounds(new Rect(element.RenderSize)).Bottom <= 0),
+                    "图片、夹子、篮子和信封收起后均不留在屏幕内");
+                SetCursorPos(area.Right - (int)Math.Round(80 * scale), area.Top + (int)Math.Round(160 * scale));
+                tick.Invoke(shelf, new object[] { null, EventArgs.Empty });
+                Check(shelf.Revealed, "收起完成后可继续从下方访问图绳");
+                var foreground = new Window { Title = "普通前台窗口", Width = 400, Height = 300, Left = 200, Top = 100, ShowInTaskbar = false };
+                try
+                {
+                    foreground.Show(); foreground.Activate(); await Task.Delay(100);
+                    var corner = new WindowsNative.Point { X = area.Right - (int)Math.Round(23 * scale), Y = area.Top + (int)Math.Round(16 * scale) };
+                    SetCursorPos(corner.X, corner.Y);
+                    Check(WindowsNative.OverCaptionButtons(shelf.Display, corner, shelf.Handle), "普通前台窗口之外的最大化窗口右上角触发避让");
+                    tick.Invoke(shelf, new object[] { null, EventArgs.Empty });
+                    Check(!shelf.Revealed, "最大化窗口右上角可在普通前台窗口之外收起图绳");
+                    var foregroundHandle = new System.Windows.Interop.WindowInteropHelper(foreground).Handle;
+                    WindowsNative.SetWindowPos(foregroundHandle, IntPtr.Zero, area.Right - 400, area.Top, 400, 300, 0x14);
+                    await Task.Delay(100);
+                    shelf.Reveal(true, true, 60);
+                    Check(!WindowsNative.OverCaptionButtons(shelf.Display, corner, shelf.Handle), "普通窗口遮住屏幕右上角时不触发避让");
+                    tick.Invoke(shelf, new object[] { null, EventArgs.Empty });
+                    Check(shelf.Revealed, "普通窗口遮住屏幕右上角时图绳保持展开");
+                }
+                finally { foreground.Close(); }
+                WindowsNative.ActivateEditor(new System.Windows.Interop.WindowInteropHelper(backdrop).Handle);
+                shelf.Reveal(true, true, 60); await Task.Delay(300);
+                backdrop.WindowState = WindowState.Normal;
+                var handle = new System.Windows.Interop.WindowInteropHelper(backdrop).Handle;
+                WindowsNative.SetWindowPos(handle, IntPtr.Zero, area.Left + 300, area.Top + 60, 1000, 700, 0x14);
+                backdrop.Activate(); await Task.Delay(100);
+                WindowsNative.Rectangle rect;
+                Check(WindowsNative.GetWindowRect(handle, out rect), "读取普通窗口位置");
+                var pointer = new WindowsNative.Point { X = rect.Right - (int)Math.Round(23 * scale), Y = rect.Top + (int)Math.Round(16 * scale) };
+                SetCursorPos(pointer.X, pointer.Y);
+                Check(!WindowsNative.OverCaptionButtons(shelf.Display, pointer, shelf.Handle), "普通窗口右上角不触发避让");
+                tick.Invoke(shelf, new object[] { null, EventArgs.Empty });
+                Check(shelf.Revealed, "普通窗口右上角不会收起图绳");
+            }
+            finally { backdrop.Close(); }
+        }
+
         static async Task CheckBasketMotion(StateStore store)
         {
             controller.TrayMenu.Pictures.IsChecked = true;
@@ -1245,7 +1330,7 @@ namespace ScreenLine.Tests
             var barPoint = new WindowsNative.Point { X = barBounds.Left + (barBounds.Right - barBounds.Left) / 4, Y = barBounds.Top + (barBounds.Bottom - barBounds.Top) / 2 };
             foreach (var action in new[] { ShotAction.Remove, ShotAction.Trash })
             {
-                string path = Path.Combine(action == ShotAction.Remove ? store.Inbox : store.Root, action + ".png");
+                string path = Path.Combine(store.Inbox, action + ".png");
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
                 byte[] bytes = Asset("删除验证", "取下图片 · 保留动效", Color.FromRgb(61, 93, 181));
                 File.WriteAllBytes(path, bytes);
@@ -1766,7 +1851,18 @@ namespace ScreenLine.Tests
             Check(card.ActionMenu.Actions.Count == 6 && !card.ActionMenu.Actions.ContainsKey(ShotAction.Copy), "图片右键保留六个操作，复制直接使用左键");
             Check(card.ActionMenu.Actions.Values.All(button => !button.IsKeyboardFocused), "右键展开时不默认选中任何操作");
             Check(card.ActionMenu.IsKeyboardFocused, "菜单容器接收键盘输入，操作项保持未选中");
-            Check(card.ActionMenu.ActualWidth <= 220 && card.ActionMenu.ActualHeight < 290, "图片菜单以窄版单列显示，整体尺寸紧凑");
+            Check(card.ActionMenu.ActualWidth <= 220 && card.ActionMenu.ActualHeight < 330, "图片菜单以窄版单列显示，整体尺寸紧凑");
+            Check(card.ActionMenu.BulkActions.Count == 4 && !card.ActionMenu.BulkActions[ShotAction.RemoveLeft].IsEnabled
+                && !card.ActionMenu.BulkActions[ShotAction.RemoveRight].IsEnabled && card.ActionMenu.BulkActions[ShotAction.RemoveAll].IsEnabled,
+                "单张图片时禁用无效的批量方向，仍可全部取下");
+            card.ActionMenu.BulkMenu.IsSubmenuOpen = true; await Task.Delay(100);
+            Check(card.ActionMenu.BulkActions[ShotAction.RemoveAll].IsVisible, "批量取下子菜单可打开");
+            card.ActionMenu.BulkMenu.IsSubmenuOpen = false;
+            card.ActionMenu.BulkMenu.Focus();
+            keybd_event(39, 0, 0, UIntPtr.Zero); keybd_event(39, 0, 2, UIntPtr.Zero);
+            await Until(() => card.ActionMenu.BulkMenu.IsSubmenuOpen && card.ActionMenu.BulkActions[ShotAction.RemoveAll].IsKeyboardFocused);
+            Check(true, "键盘右方向键打开批量子菜单并聚焦可用操作");
+            card.ActionMenu.BulkMenu.IsSubmenuOpen = false; card.ActionMenu.Focus();
             var openButton = card.ActionMenu.Actions[ShotAction.Open];
             var editButton = card.ActionMenu.Actions[ShotAction.Edit];
             var openBounds = openButton.TransformToAncestor(card.ActionMenu).TransformBounds(new Rect(openButton.RenderSize));
@@ -1900,6 +1996,20 @@ namespace ScreenLine.Tests
             await ClickMenu(trayMenu.TextButton);
             Check(!trayMenu.IsOpen && controller.TextWindow != null, "文字信封快捷入口打开文字列表并关闭菜单");
             controller.TextWindow.Close();
+            controller.Gallery.Add(path, ImageContent.Read(path));
+            controller.Shelf.Reveal(true, true, 60); await Task.Delay(300);
+            card = controller.Shelf.CardFor(path);
+            center = card.Surface.PointToScreen(new Point(card.Surface.ActualWidth / 2, card.Surface.ActualHeight / 2));
+            SetCursorPos((int)center.X, (int)center.Y); await Task.Delay(80);
+            mouse_event(8, 0, 0, 0, UIntPtr.Zero); mouse_event(16, 0, 0, 0, UIntPtr.Zero);
+            await Until(() => card.ActionMenu.IsOpen);
+            var bulkMenu = card.ActionMenu.BulkMenu;
+            Point bulkPoint = bulkMenu.PointToScreen(new Point(bulkMenu.ActualWidth / 2, bulkMenu.ActualHeight / 2));
+            SetCursorPos((int)bulkPoint.X, (int)bulkPoint.Y);
+            await Until(() => bulkMenu.IsSubmenuOpen && card.ActionMenu.BulkActions[ShotAction.RemoveAll].IsVisible);
+            await ClickMenu(card.ActionMenu.BulkActions[ShotAction.RemoveAll]);
+            Check(!controller.Gallery.Contains(path) && controller.Gallery.Collected.Any(item => item.Path == path) && File.Exists(path),
+                "实际鼠标悬停子菜单并取下全部，图片仍保留在篮子和磁盘");
         }
 
         static async Task ClickMenu(FrameworkElement entry)

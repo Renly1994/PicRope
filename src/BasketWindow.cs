@@ -183,7 +183,7 @@ namespace ScreenLine
             DeleteButton.HorizontalAlignment = HorizontalAlignment.Right; DeleteButton.VerticalAlignment = VerticalAlignment.Center;
             DeleteButton.Margin = new Thickness(0, 0, 12, 0); DeleteButton.Foreground = LightTheme.Brush("#B74E4A");
             DeleteButton.Background = LightTheme.Brush("#FFF8F7"); DeleteButton.BorderBrush = LightTheme.Brush("#ECD6D2");
-            DeleteButton.ToolTip = "移到回收站，可恢复";
+            DeleteButton.ToolTip = "收集副本移到回收站，外部原图只移除记录";
             AutomationProperties.SetName(DeleteButton, "删除所选图片"); Grid.SetColumn(DeleteButton, 2); footer.Children.Add(DeleteButton);
             HangButton = LightTheme.Button("挂上绳子", Mount, "primary"); HangButton.Width = 144; HangButton.Height = 38;
             HangButton.HorizontalAlignment = HorizontalAlignment.Right; HangButton.VerticalAlignment = VerticalAlignment.Center;
@@ -430,7 +430,7 @@ namespace ScreenLine
             mounting = true;
             try { foreach (var item in items) act(ShotAction.Trash, item); }
             finally { mounting = false; Refresh(); }
-            int removed = items.Count(item => !File.Exists(item.Path));
+            int removed = items.Count(item => !gallery.Collected.Contains(item));
             status.Text = "已删除 " + removed + " 张" + (removed < items.Length ? " · " + (items.Length - removed) + " 张未删除" : "");
         }
     }
