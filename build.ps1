@@ -69,6 +69,7 @@ if ($EditorTests) {
     if ($LASTEXITCODE -ne 0) { throw '编辑图片文件测试构建失败' }
     & (Join-Path $buildPath 'EditorFileTests.exe')
     if ($LASTEXITCODE -ne 0) { throw '编辑图片文件测试未通过' }
+    & (Join-Path $projectRoot 'tests\EditorQualityTests.ps1')
 }
 
 if ($FolderTests) {

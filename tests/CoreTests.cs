@@ -90,14 +90,46 @@ namespace ScreenLine.Tests
                 Check(ledger.Accept("a", CaptureSource.Folder, now));
                 Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(100)));
             });
-            Run("连续相同截图不会被尺寸或内容误过滤", delegate
+            Run("Windows 截图工具连续更新剪贴板只收一次", delegate
             {
                 var ledger = new CaptureReceipts();
                 DateTime now = DateTime.UtcNow;
                 Check(ledger.Accept("a", CaptureSource.Clipboard, now));
-                Check(ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(100)));
-                Check(!ledger.Accept("a", CaptureSource.Folder, now.AddMilliseconds(200)));
-                Check(!ledger.Accept("a", CaptureSource.Folder, now.AddMilliseconds(300)));
+                Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(800)));
+                Check(!ledger.Accept("a", CaptureSource.Folder, now.AddMilliseconds(1200)));
+            });
+            Run("文件夹先到时仍合并后续两次剪贴板通知", delegate
+            {
+                var ledger = new CaptureReceipts();
+                DateTime now = DateTime.UtcNow;
+                Check(ledger.Accept("a", CaptureSource.Folder, now));
+                Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(100)));
+                Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(1000)));
+            });
+            Run("短暂去重窗口后仍能再次收集相同截图", delegate
+            {
+                var ledger = new CaptureReceipts();
+                DateTime now = DateTime.UtcNow;
+                Check(ledger.Accept("a", CaptureSource.Clipboard, now));
+                Check(ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(2100)));
+                Check(!ledger.Accept("a", CaptureSource.Folder, now.AddMilliseconds(2200)));
+                Check(!ledger.Accept("a", CaptureSource.Folder, now.AddMilliseconds(2300)));
+            });
+            Run("快速截取不同内容以及切回原内容均保留", delegate
+            {
+                var ledger = new CaptureReceipts();
+                DateTime now = DateTime.UtcNow;
+                Check(ledger.Accept("a", CaptureSource.Clipboard, now));
+                Check(ledger.Accept("b", CaptureSource.Clipboard, now.AddMilliseconds(100)));
+                Check(ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(200)));
+            });
+            Run("重复通知不会无限延长相同截图的去重窗口", delegate
+            {
+                var ledger = new CaptureReceipts();
+                DateTime now = DateTime.UtcNow;
+                Check(ledger.Accept("a", CaptureSource.Clipboard, now));
+                Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(1500)));
+                Check(ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(2100)));
             });
             Run("不同内容跨来源都能收集", delegate
             {

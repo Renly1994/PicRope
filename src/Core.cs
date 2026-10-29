@@ -459,11 +459,20 @@ namespace ScreenLine
         }
 
         readonly List<Receipt> recent = new List<Receipt>();
+        string clipboardHash;
+        DateTime clipboardTime;
 
         public bool Accept(string hash, CaptureSource source, DateTime time)
         {
+            if (source == CaptureSource.Clipboard)
+            {
+                // Windows 截图工具可能在自动保存前后重复写入同一张图片。
+                if (hash == clipboardHash && time >= clipboardTime && time - clipboardTime <= TimeSpan.FromSeconds(2)) return false;
+                clipboardHash = hash;
+                clipboardTime = time;
+            }
             recent.RemoveAll(r => time - r.Time > TimeSpan.FromSeconds(5));
-            // 只合并文件夹与剪贴板对同一次截图的通知；连续截取相同内容仍可保留。
+            // 配对文件夹与剪贴板通知；去重窗口后连续截取相同内容仍可保留。
             var pair = recent.FirstOrDefault(r => !r.Paired && r.Hash == hash && r.Source != source);
             if (pair != null) { pair.Paired = true; return false; }
             recent.Add(new Receipt { Hash = hash, Source = source, Time = time });
