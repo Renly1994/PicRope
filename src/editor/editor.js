@@ -294,12 +294,16 @@ window.startEditor=async function(options){
   editor.render();
   let current;
   for(let attempt=0;attempt<100;attempt++){
-    try{current=editor.getCurrentImgData();if(current.imageData.width>0&&current.imageData.height>0)break;}catch{}
+    editor.updateState(state=>{
+      if(!state.isLoadingGlobally&&state.shownImageDimensions.width>0&&state.shownImageDimensions.height>0&&state.designLayer?.getStage())current=state;
+      return {};
+    });
+    if(current)break;
     await new Promise(resolve=>setTimeout(resolve,50));
   }
-  if(!current?.imageData?.width)throw new Error('编辑画布加载超时');
-  baseline=stateKey(current.designState);
-  canvasStage=(await readState()).designLayer.getStage();
+  if(!current)throw new Error('编辑画布加载超时');
+  baseline=stateKey(current);
+  canvasStage=current.designLayer.getStage();
   ready=true;chooseTool('Rect');showStatus('');
   send({action:'ready'});
 };

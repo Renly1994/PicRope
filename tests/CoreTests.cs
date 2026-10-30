@@ -106,6 +106,62 @@ namespace ScreenLine.Tests
                 Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(100)));
                 Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(1000)));
             });
+            Run("剪贴板先到且文件夹已配对时窗口后可再次收集", delegate
+            {
+                var ledger = new CaptureReceipts();
+                DateTime now = DateTime.UtcNow;
+                Check(ledger.Accept("a", CaptureSource.Clipboard, now));
+                Check(!ledger.Accept("a", CaptureSource.Folder, now.AddMilliseconds(100)));
+                Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(1000)));
+                Check(ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(2100)));
+            });
+            Run("单个文件夹先到且剪贴板已去重后仍可主动复制", delegate
+            {
+                var ledger = new CaptureReceipts();
+                DateTime now = DateTime.UtcNow;
+                Check(ledger.Accept("a", CaptureSource.Folder, now));
+                Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(100)));
+                Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(1000)));
+                Check(ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(2200)));
+            });
+            Run("重复剪贴板消耗后到的未配对文件夹且不延长两秒窗口", delegate
+            {
+                foreach (int later in new[] { 2100, 5000 })
+                {
+                    var ledger = new CaptureReceipts();
+                    DateTime now = DateTime.UtcNow;
+                    Check(ledger.Accept("a", CaptureSource.Clipboard, now));
+                    Check(!ledger.Accept("a", CaptureSource.Folder, now.AddMilliseconds(100)));
+                    Check(ledger.Accept("a", CaptureSource.Folder, now.AddMilliseconds(200)));
+                    Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(1000)));
+                    Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(2000)));
+                    Check(ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(later)));
+                    Check(!ledger.Accept("a", CaptureSource.Folder, now.AddMilliseconds(later + 100)));
+                }
+            });
+            Run("多个文件夹先到时重复剪贴板也消耗剩余配对记录", delegate
+            {
+                var ledger = new CaptureReceipts();
+                DateTime now = DateTime.UtcNow;
+                Check(ledger.Accept("a", CaptureSource.Folder, now));
+                Check(ledger.Accept("a", CaptureSource.Folder, now.AddMilliseconds(100)));
+                Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(200)));
+                Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(1000)));
+                Check(!ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(2200)));
+                Check(ledger.Accept("a", CaptureSource.Clipboard, now.AddMilliseconds(2300)));
+                Check(!ledger.Accept("a", CaptureSource.Folder, now.AddMilliseconds(2400)));
+            });
+            Run("跨来源通知延迟超过两秒仍在五秒内配对", delegate
+            {
+                foreach (CaptureSource first in new[] { CaptureSource.Folder, CaptureSource.Clipboard })
+                {
+                    var ledger = new CaptureReceipts();
+                    DateTime now = DateTime.UtcNow;
+                    var second = first == CaptureSource.Folder ? CaptureSource.Clipboard : CaptureSource.Folder;
+                    Check(ledger.Accept("a", first, now));
+                    Check(!ledger.Accept("a", second, now.AddSeconds(4)));
+                }
+            });
             Run("短暂去重窗口后仍能再次收集相同截图", delegate
             {
                 var ledger = new CaptureReceipts();
@@ -176,6 +232,18 @@ namespace ScreenLine.Tests
                 gallery.Add(file, image);
                 gallery.Add(file, image);
                 Check(gallery.Items.Count == 1);
+            });
+            Run("手动挂上不同文件的相同图片均保留", delegate
+            {
+                var gallery = new Gallery(new StateStore(Path.Combine(root, "manual-identical-profile")));
+                string first = WritePicture("手动相同图片一.png", 91);
+                string second = WritePicture("手动相同图片二.png", 91);
+                var image = ImageContent.Read(first);
+                var other = ImageContent.Read(second);
+                Check(image.Fingerprint == other.Fingerprint);
+                gallery.Add(first, image);
+                gallery.Add(second, other);
+                Check(gallery.Items.Count == 2 && gallery.Collected.Count == 2);
             });
             Run("只收集的图片不会挂上，取下后仍在图片篓", delegate
             {

@@ -14,5 +14,6 @@ $sources = (Get-ChildItem -LiteralPath (Join-Path $root 'src') -Filter '*.cs').F
 & (Join-Path $framework 'csc.exe') /nologo /target:exe /platform:x64 /codepage:65001 "/out:$root\build\EditorQualityTests.exe" /main:ScreenLine.Tests.EditorQualityTests "/win32manifest:$root\src\app.manifest" $references $sources (Join-Path $PSScriptRoot 'EditorQualityTests.cs')
 if ($LASTEXITCODE -ne 0) { throw '编辑器清晰度测试构建失败' }
 Copy-Item -LiteralPath (Join-Path $root 'src\App.config') -Destination (Join-Path $root 'build\EditorQualityTests.exe.config')
+Write-Host 'Running real WebView2 pixel regressions (synthetic PNG saves; no clipboard access).'
 & (Join-Path $root 'build\EditorQualityTests.exe')
 if ($LASTEXITCODE -ne 0) { throw '编辑器清晰度测试未通过' }
