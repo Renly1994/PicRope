@@ -6,6 +6,27 @@ namespace ScreenLine
 {
     internal static class ImageEditFiles
     {
+        public static byte[] ReadExport(Stream stream)
+        {
+            if (stream == null || !stream.CanRead) throw new InvalidDataException("缺少编辑结果。");
+            using (var memory = new MemoryStream())
+            {
+                var buffer = new byte[81920]; int count;
+                while ((count = stream.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    if (memory.Length + count > 64L * 1024 * 1024) throw new InvalidDataException("编辑结果过大。");
+                    memory.Write(buffer, 0, count);
+                }
+                byte[] bytes = memory.ToArray();
+                byte[] signature = { 137, 80, 78, 71, 13, 10, 26, 10 };
+                if (bytes.Length < signature.Length) throw new InvalidDataException("编辑结果不是 PNG 图片。");
+                for (int i = 0; i < signature.Length; i++)
+                    if (bytes[i] != signature[i]) throw new InvalidDataException("编辑结果不是 PNG 图片。");
+                ImageContent.Decode(bytes);
+                return bytes;
+            }
+        }
+
         public static byte[] ReadPng(string path)
         {
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
