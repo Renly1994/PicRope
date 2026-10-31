@@ -1,4 +1,4 @@
-let editor, baseline, submitted, currentKey, busy=false, ready=false, activeTool='Rect', history={hasUndo:false,hasRedo:false};
+let editor, baseline, submitted, currentKey, exportToken, busy=false, ready=false, activeTool='Rect', history={hasUndo:false,hasRedo:false};
 const buttons=[...document.querySelectorAll('header button,#toolNavigation button')];
 const drawingTools=new Set(['Pen','Arrow','Rect','Ellipse','Polygon','Line']);
 const drawingStyle={stroke:'#d64c46',strokeWidth:4};
@@ -269,6 +269,7 @@ function refreshZoom(){
 }
 
 window.startEditor=async function(options){
+  exportToken=options.exportToken;
   document.getElementById('filename').textContent=options.name;
   const source=new Image();
   await new Promise((resolve,reject)=>{source.onload=resolve;source.onerror=reject;source.src=options.source;});
@@ -325,10 +326,15 @@ window.submit=async function(action){
     await toolCompletion;
     await finishText();
     await document.fonts.ready;
-    const result=editor.getCurrentImgData({extension:'png'},1);
+    const result=editor.getCurrentImgData({extension:'png',picropeCanvasOnly:true},1);
     submitted=currentKey||stateKey(result.designState);
-    send({action:action==='finish'?'save':action,closeAfterSave:action==='finish',data:result.imageData.imageBase64});
-  }catch(error){window.completeAction({success:false,message:'无法导出图片，请重试。'});}
+    const blob=await new Promise(resolve=>result.imageData.imageCanvas.toBlob(resolve,'image/png'));
+    if(!blob||!blob.size||blob.type!=='image/png'||blob.size>64*1024*1024)throw new Error('Invalid PNG export');
+    const response=await fetch('https://screenline-editor.invalid/export',{method:'POST',headers:{
+      'Content-Type':'image/png','X-PicRope-Token':exportToken,'X-PicRope-Action':action==='finish'?'save':action,
+      'X-PicRope-Close':action==='finish'?'true':'false'},body:blob});
+    if(response.status!==202)throw new Error('Export request rejected');
+  }catch(error){send({action:'exportFailed'});window.completeAction({success:false,message:'无法导出图片，请重试。'});}
 };
 
 window.completeAction=function(result){

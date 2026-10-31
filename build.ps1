@@ -44,6 +44,7 @@ if (-not $BuildOnly -and -not ($VisibilityTests -or $FolderTests -or $MenuTests 
     if ($LASTEXITCODE -ne 0) { throw '核心测试构建失败' }
     & (Join-Path $buildPath 'CoreTests.exe')
     if ($LASTEXITCODE -ne 0) { throw '核心测试未通过' }
+    & (Join-Path $projectRoot 'tests\CapturePersistenceTests.ps1')
 }
 
 if ($DesktopTests -or $VisibilityTests -or $MenuTests -or $EditorTests -or $ThemeTests -or $WindTests -or $BasketTests -or $ScrollTests -or $BasketAppearanceTests -or $BasketMotionTests) {
@@ -70,6 +71,8 @@ if ($EditorTests) {
     & (Join-Path $buildPath 'EditorFileTests.exe')
     if ($LASTEXITCODE -ne 0) { throw '编辑图片文件测试未通过' }
     & (Join-Path $projectRoot 'tests\EditorQualityTests.ps1')
+    & (Join-Path $projectRoot 'tests\EditorTransferTests.ps1')
+    & (Join-Path $projectRoot 'tests\EditorUploadTests.ps1')
 }
 
 if ($FolderTests) {

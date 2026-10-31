@@ -1,4 +1,4 @@
-param([switch]$ExportReview)
+param([switch]$ExportReview, [switch]$PhaseReview, [switch]$SaveReview)
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $framework = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
@@ -16,6 +16,8 @@ $sources = (Get-ChildItem -LiteralPath (Join-Path $root 'src') -Filter '*.cs').F
 & (Join-Path $framework 'csc.exe') /nologo /target:exe /platform:x64 /codepage:65001 "/out:$root\build\EditorResourceProbe.exe" /main:ScreenLine.Tests.EditorResourceProbe "/win32manifest:$root\src\app.manifest" $references $sources (Join-Path $PSScriptRoot 'EditorResourceProbe.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Editor resource probe compilation failed' }
 Copy-Item -LiteralPath (Join-Path $root 'src\App.config') -Destination (Join-Path $root 'build\EditorResourceProbe.exe.config')
-if ($ExportReview) { & (Join-Path $root 'build\EditorResourceProbe.exe') '--export-review' }
+if ($SaveReview) { & (Join-Path $root 'build\EditorResourceProbe.exe') '--save-review' }
+elseif ($PhaseReview) { & (Join-Path $root 'build\EditorResourceProbe.exe') '--phase-review' }
+elseif ($ExportReview) { & (Join-Path $root 'build\EditorResourceProbe.exe') '--export-review' }
 else { & (Join-Path $root 'build\EditorResourceProbe.exe') }
 if ($LASTEXITCODE -ne 0) { throw 'Editor resource probe failed' }

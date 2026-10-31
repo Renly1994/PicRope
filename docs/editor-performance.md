@@ -1,5 +1,9 @@
 # Editor review validation (2026-10-30)
 
+Historical report: the subsequent binary-transfer optimization and actual-save
+measurements are documented in [export-memory.md](export-memory.md). The fixtures
+and workloads differ; do not compare their memory totals directly.
+
 ## Changes and correctness gates
 
 - Initialization checks loaded state, positive displayed dimensions and an attached

@@ -6,7 +6,7 @@ unless the replacement passes `tests/EditorQualityTests.ps1` without it.
 
 The baseline is Filerobot v4.9.1 (pristine Git blob
 `ebffb1513a8da3d5f139ad9ec8309e9d0c3208b3`). The patched bundle's SHA-256 is
-`9fae46b32fc74660da67acd649199d571a30141b9f8da8a0d940d007bd7109c7`.
+`30d921bc6d2845aa8939c511e4beea3e71f968dcbb21a11e5dd0d2e60069cec7`.
 These fingerprints describe this vendored
 revision, not a requirement that future upgrades retain the same file hash.
 
@@ -127,3 +127,83 @@ This uses internal Konva `_toKonvaCanvas` and `_canvas` APIs: inspect them again
 when upgrading the bundle. These VM checks do not measure browser pixels,
 elapsed time, or memory; the WebView2 quality tests and optional resource probe
 above remain separate checks.
+
+## Optional PicRope canvas-only export
+
+PicRope can explicitly skip Base64 generation while keeping the same exported
+canvas, metadata, design state, render, and cleanup paths:
+
+```javascript
+const result = editor.getCurrentImgData({
+  extension: 'png',
+  picropeCanvasOnly: true,
+}, 1);
+// result.imageData.imageCanvas is the normal HTML canvas.
+// result.imageData.imageBase64 is null; the wrapper encoder is never called.
+```
+
+This is a PicRope-only option, enabled only by the boolean `true`. Omitted,
+false, or other values retain the default exports, including the Konva encoder's
+retry/error behavior and all eight existing output contracts. Preview behavior
+is unchanged.
+
+The exact inner options variable in this bundle is `g`, initialized by
+`g=uk({size:a},g=0<arguments.length&&void 0!==arguments[0]?arguments[0]:{})`.
+It is later reused for the extension. Capture the flag before that reassignment;
+the readable equivalent of the additional change is:
+
+```javascript
+const picropeCanvasOnly = g.picropeCanvasOnly === true;
+// Existing geometry, resize, and MIME/quality setup stays in place.
+const exportCanvas = b._toKonvaCanvas(h);
+m = exportCanvas._canvas;
+v = picropeCanvasOnly
+  ? null
+  : exportCanvas.toDataURL(h.mimeType || null, h.quality || null);
+```
+
+The frontend stores `options.exportToken` in `startEditor`. Submission applies
+pending tool/text work, awaits fonts, requests this canvas-only export, and
+captures `submitted` before awaiting `imageCanvas.toBlob(callback, 'image/png')`.
+It rejects null, empty, non-PNG, or larger-than-64-MiB results. Exactly 64 MiB is
+allowed. It posts the Blob to `https://screenline-editor.invalid/export` with:
+
+```text
+Content-Type: image/png
+X-PicRope-Token: <exportToken>
+X-PicRope-Action: save | saveAs | copy
+X-PicRope-Close: true | false
+```
+
+`finish` maps to `save` with close `true`; other actions use close `false`.
+Native fetch supplies `Origin`. HTTP 202 only means accepted: the editor stays
+busy until the host invokes the existing `window.completeAction` after the
+actual operation. Export, Blob, HTTP, or transport failure first sends
+`{action:'exportFailed'}` so the host can settle save-on-close failure, then
+invokes the existing failure completion. There is no automatic Base64 retry.
+
+Run the Node-only regressions and syntax checks from the repository root:
+
+```powershell
+node --test tests/EditorExportTests.js tests/EditorSubmissionTests.js tests/EditorInitializationTests.js
+node --check vendor/Filerobot/filerobot-image-editor.min.js
+node --check src/editor/editor.js
+node --check tests/EditorExportTests.js
+node --check tests/EditorSubmissionTests.js
+```
+
+TDD RED: the new canvas-only regression reached native encoding twice, while
+the eight existing contracts still passed; the submission VM tests failed on
+the missing canvas-only option, Blob/HTTP protocol, and host failure notification.
+GREEN: all 38 Node tests pass, including startup, default export contracts,
+submission actions/headers, delayed operation and encoding timing, dirty/busy
+state, validation boundaries, and failure notification before completion.
+
+These are frontend contract checks. The VM uses the real editor
+script with drawing, DOM, Blob encoding, and transport boundaries stubbed; its
+size-boundary Blobs override the reported size without allocating 64 MiB.
+It does not by itself prove host transport/provenance validation, save-on-close
+task completion, or pixel/security behavior. Run `tests/EditorTransferTests.ps1`,
+`tests/EditorUploadTests.ps1` and `tests/EditorQualityTests.ps1` for the separate
+host/real-WebView2 checks. See `docs/export-memory.md` for measured results,
+protocol restrictions and remaining lifecycle/coverage limitations.

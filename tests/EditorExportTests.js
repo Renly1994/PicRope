@@ -81,6 +81,35 @@ test('local exporter renders exactly once for canvas and base64', () => {
   assert.equal(result.imageData.imageCanvas, h.encodings[0].canvas);
 });
 
+test('PicRope canvas-only export renders normally without calling either encoder', () => {
+  const h = harness({ failEncoding: 2 });
+  const { imageData, designState, hideLoadingSpinner } = h.run({
+    name: 'fixture', extension: 'png', picropeCanvasOnly: true
+  }, 1);
+  assert.equal(h.encodings.length, 0, 'canvas-only export must never call the wrapper encoder');
+  assert.equal(imageData.imageBase64, null);
+  assert.equal(h.renders.length, 1);
+  assert.equal(imageData.imageCanvas, h.renders[0].canvas);
+  assert.equal(imageData.fullName, 'fixture.png');
+  assert.equal(imageData.width, 1600);
+  assert.equal(imageData.height, 1000);
+  assert.equal(designState.shownImageDimensions.scaledBy, 0.4);
+  assert.equal(h.destroyed, 1);
+  assert.equal(h.pixelRatio.pixelRatio, 2);
+  assert.deepEqual(h.errors, []);
+  hideLoadingSpinner();
+  assert.deepEqual(h.actions.map(action => action.type), ['saved', 'hide', 'hide']);
+});
+
+for (const picropeCanvasOnly of [false, 'true', 1]) {
+  test(`canvas-only requires explicit boolean true (${JSON.stringify(picropeCanvasOnly)})`, () => {
+    const h = harness();
+    const { imageData } = h.run({ name: 'fixture', extension: 'png', picropeCanvasOnly });
+    assert.equal(h.encodings.length, 1);
+    assert.equal(imageData.imageBase64, 'data:image/png;base64,fixture');
+  });
+}
+
 for (const { extension, quality, size, mimeType, encodedQuality, width, height } of [
   { extension: 'png', quality: 0.5, mimeType: 'image/png', encodedQuality: null, width: 1600, height: 1000 },
   { extension: 'jpeg', quality: 0.8, mimeType: 'image/jpeg', encodedQuality: 0.8, width: 1600, height: 1000 },

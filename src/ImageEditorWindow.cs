@@ -18,6 +18,7 @@ namespace ScreenLine
     internal sealed class ImageEditorWindow : Window
     {
         const string Origin = "https://screenline-editor.invalid/";
+        readonly string exportToken = Guid.NewGuid().ToString("N");
         readonly StateStore store;
         readonly Func<string, Task> saved;
         readonly Action copied;
@@ -28,6 +29,7 @@ namespace ScreenLine
         readonly Button failureClose;
         readonly TaskCompletionSource<bool> initialized = new TaskCompletionSource<bool>();
         TaskCompletionSource<bool> saveForClose;
+        TaskCompletionSource<bool> closeConfirmation;
         bool dirty, busy, closed, closingCheck, forceClose;
         internal readonly WebView2 Browser = new WebView2();
         internal Task Ready { get { return initialized.Task; } }
@@ -71,6 +73,7 @@ namespace ScreenLine
                 closed = true;
                 initialized.TrySetCanceled();
                 if (saveForClose != null) saveForClose.TrySetResult(false);
+                if (closeConfirmation != null) closeConfirmation.TrySetResult(false);
                 Browser.Dispose();
             };
         }
@@ -104,6 +107,7 @@ namespace ScreenLine
                 core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
                 core.WebResourceRequested += delegate(object source, CoreWebView2WebResourceRequestedEventArgs e)
                 {
+                    if (e.Request.Uri == Origin + "export") { ReceiveExport(environment, e); return; }
                     if (e.Request.Uri == Origin + "source.png")
                     {
                         e.Response = environment.CreateWebResourceResponse(new MemoryStream(png ?? ImageEditFiles.ReadPng(ImagePath)), 200, "OK", "Content-Type: image/png\r\nCache-Control: no-store");
@@ -125,7 +129,7 @@ namespace ScreenLine
                 {
                     if (closed) return;
                     if (!e.IsSuccess) { ShowFailure(new IOException("图片编辑器页面加载失败。")); return; }
-                    await Browser.ExecuteScriptAsync("window.startEditor(" + json.Serialize(new { name = Path.GetFileName(ImagePath), source = Origin + "source.png" }) + ");");
+                    await Browser.ExecuteScriptAsync("window.startEditor(" + json.Serialize(new { name = Path.GetFileName(ImagePath), source = Origin + "source.png", exportToken }) + ");");
                 };
                 failurePanel.Visibility = Visibility.Collapsed;
                 core.Navigate(Origin + "index.html");
@@ -149,19 +153,94 @@ namespace ScreenLine
         async void Receive(object sender, CoreWebView2WebMessageReceivedEventArgs args)
         {
             if (closed || args.Source != Origin + "index.html") return;
-            bool success = false, didSave = false, closeAfterSave = false;
-            string message = "", action = "";
             try
             {
                 var request = json.Deserialize<Dictionary<string, object>>(args.WebMessageAsJson);
-                action = request["action"] as string;
+                string action = request["action"] as string;
                 if (action == "ready") { initialized.TrySetResult(true); return; }
                 if (action == "dirty") { dirty = (bool)request["value"]; return; }
                 if (action == "error") { ShowFailure(new InvalidOperationException(request["detail"] as string)); return; }
+                if (action == "exportFailed") { if (saveForClose != null) saveForClose.TrySetResult(false); return; }
                 if (busy || (action != "save" && action != "saveAs" && action != "copy")) return;
-                closeAfterSave = action == "save" && request.ContainsKey("closeAfterSave") && (bool)request["closeAfterSave"];
-                busy = true;
-                byte[] png = await Task.Run(() => ImageEditFiles.Decode(request["data"] as string));
+                bool closeAfterSave = action == "save" && request.ContainsKey("closeAfterSave") && (bool)request["closeAfterSave"];
+                await ApplyImage(action, closeAfterSave, () => Task.Run(() => ImageEditFiles.Decode(request["data"] as string)));
+            }
+            catch (Exception error) { store.Log(error); }
+        }
+
+        static string Header(CoreWebView2WebResourceRequest request, string name)
+        {
+            return request.Headers.Contains(name) ? request.Headers.GetHeader(name) : null;
+        }
+
+        bool ExportResponse(CoreWebView2Environment environment, CoreWebView2WebResourceRequestedEventArgs args, int status, string reason)
+        {
+            if (closed) return false;
+            try { args.Response = environment.CreateWebResourceResponse(null, status, reason, "Cache-Control: no-store"); return true; }
+            catch (Exception error) { store.Log(error); return false; }
+        }
+
+        async void ReceiveExport(CoreWebView2Environment environment, CoreWebView2WebResourceRequestedEventArgs args)
+        {
+            var deferral = args.GetDeferral();
+            byte[] png = null; bool reserved = false, closeAfterSave = false;
+            string action = null;
+            try
+            {
+                var request = args.Request;
+                action = Header(request, "X-PicRope-Action");
+                string close = Header(request, "X-PicRope-Close");
+                if (closed || Browser.CoreWebView2.Source != Origin + "index.html" || request.Method != "POST" ||
+                    Header(request, "Origin") != Origin.TrimEnd('/') || Header(request, "Content-Type") != "image/png" ||
+                    Header(request, "X-PicRope-Token") != exportToken ||
+                    (action != "save" && action != "saveAs" && action != "copy") || (close != "true" && close != "false") ||
+                    (close == "true" && action != "save"))
+                {
+                    ExportResponse(environment, args, 403, "Forbidden"); return;
+                }
+                if (busy) { ExportResponse(environment, args, 409, "Conflict"); return; }
+                busy = reserved = true;
+                closeAfterSave = close == "true";
+                // Only the captured request body stream is read on a worker; WebView2 objects stay on the UI thread.
+                using (var body = request.Content) png = await Task.Run(() => ImageEditFiles.ReadExport(body));
+                if (!ExportResponse(environment, args, 202, "Accepted")) png = null;
+            }
+            catch (Exception error)
+            {
+                png = null; store.Log(error);
+                ExportResponse(environment, args, 400, "Bad Request");
+            }
+            finally
+            {
+                try { deferral.Complete(); }
+                catch (Exception error) { png = null; store.Log(error); }
+                if (png == null && reserved) { busy = false; if (saveForClose != null) saveForClose.TrySetResult(false); }
+            }
+            // Finish interception before modal save dialogs or scripts can run.
+            try
+            {
+                if (png != null) await (await Dispatcher.InvokeAsync(new Func<Task>(async delegate
+                {
+                    if (closed) { busy = false; return; }
+                    await ApplyImage(action, closeAfterSave, () => Task.FromResult(png));
+                })));
+            }
+            catch (Exception error)
+            {
+                busy = false; store.Log(error);
+                if (saveForClose != null) saveForClose.TrySetResult(false);
+                if (!closed) ShowFailure(error);
+            }
+        }
+
+        async Task ApplyImage(string action, bool closeAfterSave, Func<Task<byte[]>> read)
+        {
+            bool success = false, didSave = false;
+            string message = "";
+            busy = true;
+            try
+            {
+                byte[] png = await read();
                 if (closed) return;
                 if (action == "copy")
                 {
@@ -203,12 +282,30 @@ namespace ScreenLine
             }
             busy = false;
             if (closed) return;
-            await Browser.ExecuteScriptAsync("window.completeAction(" + json.Serialize(new { success, saved = didSave, message, name = Path.GetFileName(ImagePath) }) + ");");
-            if (saveForClose != null && action == "save") saveForClose.TrySetResult(success);
+            try { await Browser.ExecuteScriptAsync("window.completeAction(" + json.Serialize(new { success, saved = didSave, message, name = Path.GetFileName(ImagePath) }) + ");"); }
+            catch (Exception error) { store.Log(error); success = false; }
+            finally { if (saveForClose != null && action == "save") saveForClose.TrySetResult(success); }
             if (success && closeAfterSave) Close();
         }
 
         public async Task<bool> ConfirmClose()
+        {
+            var pending = saveForClose;
+            if (pending != null) return await pending.Task;
+            if (closeConfirmation != null) return await closeConfirmation.Task;
+            var confirmation = new TaskCompletionSource<bool>();
+            closeConfirmation = confirmation;
+            try
+            {
+                bool result = await ConfirmCloseCore();
+                confirmation.TrySetResult(result);
+                return result;
+            }
+            catch (Exception error) { store.Log(error); confirmation.TrySetResult(false); return false; }
+            finally { if (closeConfirmation == confirmation) closeConfirmation = null; }
+        }
+
+        async Task<bool> ConfirmCloseCore()
         {
             if (busy) return false;
             if (!dirty) return true;
@@ -217,11 +314,11 @@ namespace ScreenLine
             var choice = dialog.Choice;
             if (choice == MessageBoxResult.Cancel) return false;
             if (choice == MessageBoxResult.No) return true;
-            saveForClose = new TaskCompletionSource<bool>();
-            await Browser.ExecuteScriptAsync("window.submit('save');");
-            bool result = await saveForClose.Task;
-            saveForClose = null;
-            return result;
+            var pending = new TaskCompletionSource<bool>();
+            saveForClose = pending;
+            try { await Browser.ExecuteScriptAsync("window.submit('save');"); return await pending.Task; }
+            catch (Exception error) { store.Log(error); pending.TrySetResult(false); return false; }
+            finally { if (saveForClose == pending) saveForClose = null; }
         }
 
         async void ClosingEditor(object sender, CancelEventArgs args)
@@ -230,21 +327,25 @@ namespace ScreenLine
             args.Cancel = true;
             if (closingCheck) return;
             closingCheck = true;
-            if (await ConfirmClose())
+            try
             {
-                if (initialized.Task.Status == TaskStatus.RanToCompletion && WindowState != WindowState.Minimized)
+                if (await ConfirmClose())
                 {
-                    try
+                    if (initialized.Task.Status == TaskStatus.RanToCompletion && WindowState != WindowState.Minimized)
                     {
-                        var bounds = json.Deserialize<double[]>(await Browser.ExecuteScriptAsync("window.imageBounds()"));
-                        ReturnPicture = await Task.Run(() => PinnedImageWindow.ReadPicture(ImagePath));
-                        ReturnBounds = new Rect(Browser.PointToScreen(new Point(bounds[0], bounds[1])), Browser.PointToScreen(new Point(bounds[0] + bounds[2], bounds[1] + bounds[3])));
+                        try
+                        {
+                            var bounds = json.Deserialize<double[]>(await Browser.ExecuteScriptAsync("window.imageBounds()"));
+                            ReturnPicture = await Task.Run(() => PinnedImageWindow.ReadPicture(ImagePath));
+                            ReturnBounds = new Rect(Browser.PointToScreen(new Point(bounds[0], bounds[1])), Browser.PointToScreen(new Point(bounds[0] + bounds[2], bounds[1] + bounds[3])));
+                        }
+                        catch (Exception error) { store.Log(error); }
                     }
-                    catch (Exception error) { store.Log(error); }
+                    await Dispatcher.InvokeAsync(new Action(CloseWithoutPrompt));
                 }
-                await Dispatcher.InvokeAsync(new Action(CloseWithoutPrompt));
             }
-            closingCheck = false;
+            catch (Exception error) { store.Log(error); }
+            finally { closingCheck = false; }
         }
 
         public void CloseWithoutPrompt() { forceClose = true; Close(); }
