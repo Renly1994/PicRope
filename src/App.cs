@@ -19,9 +19,9 @@ using Forms = System.Windows.Forms;
 [assembly: AssemblyTitle("PicRope · 图绳")]
 [assembly: AssemblyProduct("PicRope")]
 [assembly: AssemblyDescription("图绳：把截图挂在屏幕上沿，随手复制、拖拽和保存。")]
-[assembly: AssemblyVersion("1.2.1.0")]
-[assembly: AssemblyFileVersion("1.2.1.0")]
-[assembly: AssemblyInformationalVersion("1.2.1")]
+[assembly: AssemblyVersion("1.2.2.0")]
+[assembly: AssemblyFileVersion("1.2.2.0")]
+[assembly: AssemblyInformationalVersion("1.2.2")]
 
 namespace ScreenLine
 {
@@ -103,6 +103,14 @@ namespace ScreenLine
             });
             TrayMenu.OnAction(TrayMenu.AppearanceButton, ShowAppearance);
             var more = TrayMenu.MoreMenu;
+            MenuItem topHoverToggle = null;
+            topHoverToggle = more.AddAction("鼠标移至顶部时展开", "show", delegate
+            {
+                try { Shelf.SetRevealOnTopHover(topHoverToggle.IsChecked); }
+                catch (Exception error) { topHoverToggle.IsChecked = store.State.RevealOnTopHover; store.Log(error); Notice("顶部展开设置保存失败"); }
+            });
+            topHoverToggle.IsCheckable = true;
+            topHoverToggle.IsChecked = store.State.RevealOnTopHover;
             MenuItem previewToggle = null;
             previewToggle = more.AddAction("悬停预览", "picture", delegate
             {

@@ -73,7 +73,8 @@ namespace ScreenLine
         double lastFrame, hideTime, hideFrom, drawnWidth = -1, drawnSag = -1;
         double lastScrollOffset;
         bool rendering;
-        bool pinned, previousDown, suppressEdge, trackingScrollHover, avoidingCaption;
+        bool pinned, previousDown, suppressEdge, trackingScrollHover, avoidingCaption, switchingDisplay, displayMoveQueued;
+        int displaySwitchVersion;
         string viewingName;
         IntPtr viewingWindow;
         DateTime viewerSearchUntil;
@@ -245,6 +246,7 @@ namespace ScreenLine
             Closed += delegate
             {
                 closing = true;
+                CancelDisplaySwitch();
                 scrollHover.Stop(); trackingScrollHover = false;
                 Preview.Dispose();
                 foreach (var pin in pins.Values.ToArray()) pin.Close();
@@ -261,7 +263,7 @@ namespace ScreenLine
         IntPtr Messages(IntPtr window, int message, IntPtr w, IntPtr l, ref bool handled)
         {
             if (message == 0x21) { handled = true; return new IntPtr(3); }
-            if (message == 0x02E0) Dispatcher.BeginInvoke(new Action(delegate { if (Display != null) MoveToDisplay(); }));
+            if (message == 0x02E0 && !switchingDisplay) Dispatcher.BeginInvoke(new Action(delegate { if (Display != null && !switchingDisplay) MoveToDisplay(); }));
             return IntPtr.Zero;
         }
 
@@ -279,6 +281,12 @@ namespace ScreenLine
         }
 
         void MoveToDisplay()
+        {
+            CancelDisplaySwitch();
+            PositionOnDisplay();
+        }
+
+        void PositionOnDisplay()
         {
             scrollHover.Stop(); trackingScrollHover = false;
             Preview.Dismiss();
@@ -300,6 +308,17 @@ namespace ScreenLine
             catch { gallery.Store.State.DisplayDevice = previous; throw; }
             MoveToDisplay();
             Reveal(true, true, 0);
+        }
+
+        internal void SetRevealOnTopHover(bool enabled)
+        {
+            bool previous = gallery.Store.State.RevealOnTopHover;
+            gallery.Store.State.RevealOnTopHover = enabled;
+            try { gallery.Store.Save(); }
+            catch { gallery.Store.State.RevealOnTopHover = previous; throw; }
+            edgeSince = DateTime.MaxValue;
+            // 跨屏收起也是顶部悬停发起的，关闭时取消尚未完成的自动展开。
+            if (!enabled) CancelDisplaySwitch();
         }
 
         public void Update()
@@ -589,8 +608,17 @@ namespace ScreenLine
             catch (Exception error) { gallery.Store.Log(error); card.ResetClip(); }
         }
 
+        void CancelDisplaySwitch()
+        {
+            if (switchingDisplay || displayMoveQueued) edgeSince = DateTime.MaxValue;
+            switchingDisplay = false;
+            displayMoveQueued = false;
+            displaySwitchVersion++;
+        }
+
         public void Reveal(bool shown, bool pin, double seconds)
         {
+            CancelDisplaySwitch();
             pinned = pin;
             peekUntil = DateTime.UtcNow.AddSeconds(seconds);
             awaySince = DateTime.MaxValue;
@@ -707,7 +735,7 @@ namespace ScreenLine
 
         void Tick(object sender, EventArgs args)
         {
-            if (Capturing) return;
+            if (Capturing) { CancelDisplaySwitch(); edgeSince = DateTime.MaxValue; return; }
             var cursor = WindowsNative.Cursor();
             var screen = SelectedDisplay();
             bool down = (WindowsNative.GetAsyncKeyState(1) & 0x8000) != 0;
@@ -719,6 +747,42 @@ namespace ScreenLine
             var now = DateTime.UtcNow;
             bool viewing = ViewingImage(now);
             bool busy = cards.Values.Any(c => c.Busy);
+            if (!nearTop) suppressEdge = false;
+            if (nearTop && down && !previousDown && !over && !viewing)
+            {
+                suppressEdge = true;
+                edgeSince = DateTime.MaxValue;
+                viewingName = null;
+                viewingWindow = IntPtr.Zero;
+                Reveal(false, false, 0);
+            }
+            previousDown = down;
+            if (switchingDisplay)
+            {
+                if (hideTime >= 0.22 && !displayMoveQueued)
+                {
+                    displayMoveQueued = true;
+                    int version = displaySwitchVersion;
+                    PositionOnDisplay();
+                    Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(delegate
+                    {
+                        if (version != displaySwitchVersion) return;
+                        displayMoveQueued = false;
+                        if (!switchingDisplay || closing || Capturing) { CancelDisplaySwitch(); return; }
+                        if ((WindowsNative.GetAsyncKeyState(1) & 0x8000) != 0 || suppressEdge)
+                        {
+                            suppressEdge = true; previousDown = true;
+                            CancelDisplaySwitch(); return;
+                        }
+                        PositionOnDisplay();
+                        var selected = SelectedDisplay();
+                        if (WindowsNative.OverCaptionButtons(selected, WindowsNative.Cursor(), Handle)
+                            || WindowsNative.FullScreen(selected, Handle)) { CancelDisplaySwitch(); return; }
+                        Reveal(true, false, 0);
+                    }));
+                }
+                return;
+            }
             if ((Revealed || nearTop || avoidingCaption) && !busy && !viewing && !ChoosingAppearance && !ChoosingBasket && !ChoosingTexts
                 && WindowsNative.OverCaptionButtons(screen, cursor, Handle))
             {
@@ -733,22 +797,18 @@ namespace ScreenLine
                     && cursor.Y >= Display.WorkingArea.Top && cursor.Y < Display.WorkingArea.Top + 220 * WindowsNative.MonitorScale(Display))
                     Reveal(true, false, 0);
             }
-            if (!nearTop) suppressEdge = false;
-            if (nearTop && down && !previousDown && !over && !viewing)
-            {
-                suppressEdge = true;
-                viewingName = null;
-                viewingWindow = IntPtr.Zero;
-                Reveal(false, false, 0);
-            }
-            previousDown = down;
-            if (nearTop && !down && !suppressEdge && !WindowsNative.FullScreen(screen, Handle))
+            if (gallery.Store.State.RevealOnTopHover && nearTop && !down && !suppressEdge && !WindowsNative.FullScreen(screen, Handle))
             {
                 if (edgeSince == DateTime.MaxValue) edgeSince = now;
                 if (now - edgeSince >= TimeSpan.FromMilliseconds(320) && (!Revealed || screen.DeviceName != Display.DeviceName))
                 {
-                    MoveToDisplay();
-                    Reveal(true, false, 0);
+                    if (Revealed && screen.DeviceName != Display.DeviceName)
+                    {
+                        Reveal(false, false, 0);
+                        switchingDisplay = true;
+                        return;
+                    }
+                    else { MoveToDisplay(); Reveal(true, false, 0); }
                 }
             }
             else edgeSince = DateTime.MaxValue;

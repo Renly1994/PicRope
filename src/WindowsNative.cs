@@ -22,6 +22,10 @@ namespace ScreenLine
         [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int key);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rectangle rectangle);
+        [DllImport("user32.dll")] static extern int GetWindowRgn(IntPtr window, IntPtr region);
+        [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
+        [DllImport("gdi32.dll")] static extern bool PtInRegion(IntPtr region, int x, int y);
+        [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr handle);
         [DllImport("user32.dll")] public static extern IntPtr GetShellWindow();
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder name, int length);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int length);
@@ -125,6 +129,16 @@ namespace ScreenLine
                 Rectangle candidate;
                 if (!GetWindowRect(window, out candidate) || cursor.X < candidate.Left || cursor.X >= candidate.Right
                     || cursor.Y < candidate.Top || cursor.Y >= candidate.Bottom) return true;
+                // 不规则浮窗的外接矩形可能盖住按钮，但其实际窗口区域并不挡住落点。
+                IntPtr region = CreateRectRgn(0, 0, 0, 0);
+                if (region != IntPtr.Zero)
+                {
+                    try
+                    {
+                        if (GetWindowRgn(window, region) != 0 && !PtInRegion(region, cursor.X - candidate.Left, cursor.Y - candidate.Top)) return true;
+                    }
+                    finally { DeleteObject(region); }
+                }
                 var name = new StringBuilder(128);
                 GetClassName(window, name, name.Capacity);
                 string type = name.ToString();

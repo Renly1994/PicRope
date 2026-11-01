@@ -18,13 +18,17 @@ namespace ScreenLine.Tests
 {
     internal static class DesktopTests
     {
-        [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+        [DllImport("user32.dll", SetLastError = true)] static extern bool SetCursorPos(int x, int y);
         [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
         [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(WindowsNative.Point point);
         [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string type, string title);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr GetProp(IntPtr window, string name);
         [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr window, uint flags);
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder text, int size);
+        [StructLayout(LayoutKind.Sequential)] struct LastInput { public uint Size, Tick; }
+        [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LastInput info);
         static int checks;
         static DesktopController controller;
         static Forms.IDataObject previousClipboard;
@@ -43,7 +47,9 @@ namespace ScreenLine.Tests
                 catch (Exception error) { Console.WriteLine("截图时间测试失败：" + error.Message); Environment.ExitCode = 1; }
                 return;
             }
-            bool passiveInput = arguments.Contains("--scroll-bounds") || arguments.Contains("--basket-appearance") || arguments.Contains("--basket-motion");
+            bool topHoverOnly = arguments.Contains("--top-hover");
+            bool menuInputProbe = arguments.Contains("--menu-input-probe");
+            bool passiveInput = topHoverOnly || menuInputProbe || arguments.Contains("--scroll-bounds") || arguments.Contains("--basket-appearance") || arguments.Contains("--basket-motion");
             var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
             LightTheme.Install(application);
             application.DispatcherUnhandledException += delegate(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs args)
@@ -54,7 +60,13 @@ namespace ScreenLine.Tests
             };
             application.Startup += async delegate
             {
-                try { await Run(arguments.Contains("--caption-motion"), arguments.Contains("--visibility"), arguments.Contains("--menus"), arguments.Contains("--editor"), arguments.Contains("--discard"), arguments.Contains("--shelf-motion"), arguments.Contains("--pins"), arguments.Contains("--themes"), arguments.Contains("--copied"), arguments.Contains("--wind"), arguments.Contains("--basket"), arguments.Contains("--scroll-bounds"), arguments.Contains("--basket-appearance"), arguments.Contains("--basket-motion")); Console.WriteLine("桌面测试：{0} 项通过", checks); }
+                try
+                {
+                    if (topHoverOnly) CheckTopHoverMenu();
+                    else if (menuInputProbe) await CheckMenuInputProbe();
+                    else await Run(arguments.Contains("--caption-motion"), arguments.Contains("--visibility"), arguments.Contains("--menus"), arguments.Contains("--editor"), arguments.Contains("--discard"), arguments.Contains("--shelf-motion"), arguments.Contains("--pins"), arguments.Contains("--themes"), arguments.Contains("--copied"), arguments.Contains("--wind"), arguments.Contains("--basket"), arguments.Contains("--scroll-bounds"), arguments.Contains("--basket-appearance"), arguments.Contains("--basket-motion"));
+                    Console.WriteLine(Environment.ExitCode == 2 ? "桌面测试：跳过物理输入验证" : "桌面测试：" + checks + " 项通过");
+                }
                 catch (Exception error) { Console.WriteLine("桌面测试失败：" + error); Environment.ExitCode = 1; }
                 if (!passiveInput) mouse_event(4, 0, 0, 0, UIntPtr.Zero);
                 try
@@ -72,6 +84,138 @@ namespace ScreenLine.Tests
                 application.Shutdown(Environment.ExitCode);
             };
             application.Run();
+        }
+
+        // 只分发菜单事件并离屏渲染，不读取剪贴板、不移动鼠标或激活窗口。
+        static void CheckTopHoverMenu()
+        {
+            string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "test-data", "desktop-" + Guid.NewGuid().ToString("N"));
+            string watched = Path.Combine(root, "WindowsScreenshots"); Directory.CreateDirectory(watched);
+            var store = new StateStore(Path.Combine(root, "profile"));
+            controller = new DesktopController(store, watched, false);
+            var topHover = controller.TrayMenu.MoreMenu.Items.OfType<MenuItem>().Single(item => item.Header as string == "鼠标移至顶部时展开");
+            Check(topHover.IsCheckable && topHover.IsChecked, "顶部悬停菜单默认开启");
+            topHover.IsChecked = false; topHover.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Check(!store.State.RevealOnTopHover && !new StateStore(store.Root).State.RevealOnTopHover, "菜单关闭顶部悬停并保存");
+            controller.Dispose();
+            store = new StateStore(store.Root); controller = new DesktopController(store, watched, false);
+            var more = controller.TrayMenu.MoreMenu;
+            topHover = more.Items.OfType<MenuItem>().Single(item => item.Header as string == "鼠标移至顶部时展开");
+            Check(!topHover.IsChecked && !store.State.RevealOnTopHover, "重启后菜单与配置保留关闭状态");
+            topHover.IsChecked = true; topHover.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Check(store.State.RevealOnTopHover && new StateStore(store.Root).State.RevealOnTopHover, "菜单重新开启顶部悬停并保存");
+            foreach (var notice in Application.Current.Windows.OfType<LightNotice>().ToArray()) notice.Close();
+            using (var locked = new FileStream(Path.Combine(store.Root, "state.json"), FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                topHover.IsChecked = false; topHover.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            }
+            Check(topHover.IsChecked && store.State.RevealOnTopHover && new StateStore(store.Root).State.RevealOnTopHover, "保存失败恢复菜单勾选与内存、磁盘配置");
+            Check(Application.Current.Windows.OfType<LightNotice>().Any(), "保存失败显示提示");
+            foreach (var notice in Application.Current.Windows.OfType<LightNotice>().ToArray()) notice.Close();
+            more.ApplyTemplate(); more.Measure(new Size(1000, 1000)); more.Arrange(new Rect(more.DesiredSize)); more.UpdateLayout();
+            Check(more.ActualWidth > 0 && more.ActualHeight > 0 && topHover.ActualWidth > 0, "包含新开关的更多操作菜单可完成布局");
+            var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(RenderMenu(more)));
+            using (var output = File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "top-hover-more-menu.png"))) encoder.Save(output);
+            Directory.CreateDirectory(store.Inbox);
+            string path = Path.Combine(store.Inbox, "菜单失败恢复.png");
+            byte[] content = Asset("菜单恢复", "保留原文件", Colors.SlateBlue); File.WriteAllBytes(path, content);
+            controller.Gallery.Add(path, ImageContent.Decode(content));
+            var card = controller.Shelf.CardFor(path);
+            Check(card.ActionMenu.Actions.Count == 6, "关闭和重新开启悬停后仍可创建图片右键菜单");
+            more.Items.OfType<MenuItem>().Single(item => item.Header as string == "全部取下（保留文件）")
+                .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Check(controller.Gallery.Items.Count == 0 && new StateStore(store.Root).State.Images.Count == 0 && File.Exists(path),
+                "保存失败回滚后全部取下仍能执行、保存并保留原文件");
+        }
+
+        static async Task CheckMenuInputProbe()
+        {
+            var idle = new LastInput { Size = (uint)Marshal.SizeOf(typeof(LastInput)) };
+            bool inputReadable = GetLastInputInfo(ref idle);
+            uint idleMilliseconds = inputReadable ? unchecked((uint)Environment.TickCount - idle.Tick) : 0;
+            int runningInstances = System.Diagnostics.Process.GetProcessesByName("PicRope").Length;
+            Console.WriteLine("物理菜单预检：输入状态可读={0}，无输入时间={1}ms，PicRope 实例={2}", inputReadable, idleMilliseconds, runningInstances);
+            if (!inputReadable || idleMilliseconds < 10000 || runningInstances > 0)
+            {
+                Console.WriteLine("跳过物理菜单探测：用户最近 10 秒内有输入、输入状态不可读或存在 PicRope 实例。");
+                Environment.ExitCode = 2; return;
+            }
+            var before = WindowsNative.Cursor(); var focus = WindowsNative.GetForegroundWindow();
+            Point? intended = null; ShotCard card = null;
+            try
+            {
+                string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "test-data", "desktop-" + Guid.NewGuid().ToString("N"));
+                var store = new StateStore(Path.Combine(root, "profile"));
+                controller = new DesktopController(store, Path.Combine(root, "watched"), false);
+                foreach (var notice in Application.Current.Windows.OfType<LightNotice>().ToArray()) notice.Close();
+                var shelf = controller.Shelf; shelf.Show();
+                Directory.CreateDirectory(store.Inbox); string path = Path.Combine(store.Inbox, "右键输入探测.png");
+                byte[] content = Asset("右键输入探测", "独立测试实例", Colors.SlateBlue); File.WriteAllBytes(path, content);
+                controller.Gallery.Add(path, ImageContent.Decode(content));
+                shelf.Reveal(true, true, 30); await Task.Delay(350);
+                var currentInput = new LastInput { Size = idle.Size };
+                if (!shelf.Revealed || !GetLastInputInfo(ref currentInput) || currentInput.Tick != idle.Tick)
+                {
+                    Console.WriteLine("跳过物理菜单探测：准备期间发生用户输入或前台处于全屏。");
+                    Environment.ExitCode = 2; return;
+                }
+                card = shelf.CardFor(path); shelf.UpdateLayout();
+                intended = card.Surface.PointToScreen(new Point(card.Surface.ActualWidth / 2, card.Surface.ActualHeight / 2));
+                await MovePointerForClick(card.Surface);
+                mouse_event(8, 0, 0, 0, UIntPtr.Zero); mouse_event(16, 0, 0, 0, UIntPtr.Zero);
+                var deadline = DateTime.UtcNow.AddSeconds(1);
+                while ((!card.ActionMenu.IsOpen || card.ActionMenu.ActualHeight <= 0) && DateTime.UtcNow < deadline) await Task.Delay(20);
+                TraceInput("图片右键后", intended.Value, true, 0);
+                Check(card.ActionMenu.IsOpen && card.ActionMenu.ActualHeight > 0, "命中隔离实例后实际右键可打开图片菜单");
+            }
+            finally
+            {
+                if (card != null) card.ActionMenu.IsOpen = false;
+                var current = WindowsNative.Cursor();
+                if (intended.HasValue && Math.Abs(current.X - intended.Value.X) <= 2 && Math.Abs(current.Y - intended.Value.Y) <= 2)
+                    Console.WriteLine("恢复鼠标位置：" + SetCursorPos(before.X, before.Y));
+                uint foregroundProcess; GetWindowThreadProcessId(WindowsNative.GetForegroundWindow(), out foregroundProcess);
+                if (foregroundProcess == (uint)System.Diagnostics.Process.GetCurrentProcess().Id) WindowsNative.SetForegroundWindow(focus);
+            }
+        }
+
+        static string WindowIdentity(IntPtr window)
+        {
+            uint process; GetWindowThreadProcessId(window, out process);
+            var name = new StringBuilder(128); GetClassName(window, name, name.Capacity);
+            return window + " (class=" + name + ", pid=" + process + ")";
+        }
+
+        static void TraceInput(string stage, Point intended, bool moved, int error)
+        {
+            var actual = WindowsNative.Cursor();
+            Console.WriteLine("输入诊断 [{0}] 目标={1},{2}，SetCursorPos={3}，error={4}，实际={5},{6}，命中={7}，前台={8}",
+                stage, intended.X, intended.Y, moved, error, actual.X, actual.Y,
+                WindowIdentity(WindowFromPoint(actual)), WindowIdentity(WindowsNative.GetForegroundWindow()));
+        }
+
+        static async Task MovePointerForClick(FrameworkElement entry)
+        {
+            var source = PresentationSource.FromVisual(entry) as System.Windows.Interop.HwndSource;
+            if (source == null) throw new Exception("测试控件没有窗口，取消输入：" + entry.GetType().Name);
+            Point intended = entry.PointToScreen(new Point(entry.ActualWidth / 2, entry.ActualHeight / 2));
+            bool moved = SetCursorPos((int)intended.X, (int)intended.Y);
+            int error = moved ? 0 : Marshal.GetLastWin32Error(); TraceInput("移动鼠标", intended, moved, error);
+            if (!moved) throw new Exception("SetCursorPos 失败，取消点击，Win32 error=" + error);
+            var deadline = DateTime.UtcNow.AddMilliseconds(800);
+            while (true)
+            {
+                var actual = WindowsNative.Cursor();
+                if (Math.Abs(actual.X - intended.X) > 2 || Math.Abs(actual.Y - intended.Y) > 2)
+                    throw new Exception("鼠标位置被其他输入改变，取消测试点击");
+                if (GetAncestor(WindowFromPoint(actual), 2) == GetAncestor(source.Handle, 2)) return;
+                if (DateTime.UtcNow >= deadline)
+                {
+                    TraceInput("落点未命中测试窗口", intended, moved, error);
+                    throw new Exception("鼠标落点未命中测试窗口，取消点击；期望=" + WindowIdentity(source.Handle));
+                }
+                await Task.Delay(30);
+            }
         }
 
         static async Task Run(bool captionMotionOnly, bool visibilityOnly, bool menusOnly, bool editorOnly, bool discardOnly, bool shelfMotionOnly, bool pinsOnly, bool themesOnly, bool copiedOnly, bool windOnly, bool basketOnly, bool scrollOnly, bool basketAppearanceOnly, bool basketMotionOnly)
@@ -211,6 +355,7 @@ namespace ScreenLine.Tests
             Check(WindowFromPoint(WindowsNative.Cursor()) != controller.Shelf.Handle, "透明区域允许鼠标点击穿透");
             await CheckVisibility();
 
+            controller.Shelf.SetRevealOnTopHover(false);
             string copiedFile = await DragTo(folderImage, Path.Combine(root, "drop-copy"), false);
             Check(File.Exists(copiedFile) && File.Exists(folderImage) && controller.Gallery.Items.Count == 3, "实际拖拽复制可传递文件并保留原图");
             string moved = await DragTo(folderImage, Path.Combine(root, "drop-move"), true);
@@ -230,6 +375,9 @@ namespace ScreenLine.Tests
             await controller.Start();
             Check(controller.Gallery.Items.Count == 1 && controller.Gallery.Items[0].Path == retained, "重新启动可恢复挂着的图片");
             Check(controller.Captures.CollectClipboard, "重新启动可恢复剪贴板收集设置");
+            Check(!controller.Gallery.Store.State.RevealOnTopHover
+                && !controller.TrayMenu.MoreMenu.Items.OfType<MenuItem>().Single(item => item.Header as string == "鼠标移至顶部时展开").IsChecked,
+                "重新启动后保留顶部悬停关闭状态，菜单同步取消勾选");
             await Task.Delay(900);
             var restoredCard = controller.Shelf.CardFor(retained);
             var restoredCanvas = (System.Windows.Controls.Canvas)restoredCard.Parent;
@@ -1148,12 +1296,24 @@ namespace ScreenLine.Tests
             SetCursorPos(bounds.Left + 400, controller.Shelf.Display.Bounds.Top + 1);
             await Until(() => controller.Shelf.Revealed);
             Check(controller.Shelf.Revealed, "鼠标停在屏幕上沿可再次展开");
+            controller.Shelf.SetRevealOnTopHover(false);
+            controller.Shelf.Reveal(false, false, 0);
+            await Task.Delay(500);
+            Check(!controller.Shelf.Revealed, "关闭顶部悬停展开后实际鼠标停留不唤出");
+            controller.TrayMenu.VisibilityButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(controller.Shelf.Revealed, "关闭顶部悬停展开后托盘显示入口仍可使用");
+            controller.Shelf.Reveal(false, false, 0);
+            controller.Shelf.SetRevealOnTopHover(true);
+            await Until(() => controller.Shelf.Revealed);
+            Check(controller.Shelf.Revealed, "重新开启顶部悬停展开后实际鼠标停留恢复唤出");
             await CheckViewerClose();
         }
 
         static async Task CheckCaptionMotion()
         {
             var shelf = controller.Shelf;
+            bool previousTopHover = controller.Gallery.Store.State.RevealOnTopHover;
+            shelf.SetRevealOnTopHover(false);
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
             var slide = (TranslateTransform)typeof(ShelfWindow).GetField("slide", flags).GetValue(shelf);
             var clock = (System.Diagnostics.Stopwatch)typeof(ShelfWindow).GetField("clock", flags).GetValue(shelf);
@@ -1171,7 +1331,23 @@ namespace ScreenLine.Tests
                 WindowsNative.ActivateEditor(new System.Windows.Interop.WindowInteropHelper(backdrop).Handle);
                 var area = shelf.Display.WorkingArea;
                 double scale = WindowsNative.MonitorScale(shelf.Display);
-                SetCursorPos(area.Right - (int)Math.Round(23 * scale), area.Top + (int)Math.Round(16 * scale));
+                var captionPoint = new Point(area.Right - (int)Math.Round(23 * scale), area.Top + (int)Math.Round(16 * scale));
+                bool captionMoved = SetCursorPos((int)captionPoint.X, (int)captionPoint.Y);
+                TraceInput("最大化窗口按钮", captionPoint, captionMoved, captionMoved ? 0 : Marshal.GetLastWin32Error());
+                var actualCaptionPoint = WindowsNative.Cursor();
+                if (!captionMoved || actualCaptionPoint.X != (int)captionPoint.X || actualCaptionPoint.Y != (int)captionPoint.Y)
+                    throw new Exception("[测试环境] 鼠标未到达标题栏目标点，停止检查");
+                WindowsNative.Rectangle backdropBounds;
+                var backdropHandle = new System.Windows.Interop.WindowInteropHelper(backdrop).Handle;
+                WindowsNative.GetWindowRect(backdropHandle, out backdropBounds);
+                Console.WriteLine("按钮诊断：backdrop={0}，rect={1},{2},{3},{4}，work={5}，scale={6}，overCaption={7}",
+                    WindowIdentity(backdropHandle), backdropBounds.Left, backdropBounds.Top, backdropBounds.Right, backdropBounds.Bottom, area, scale,
+                    WindowsNative.OverCaptionButtons(shelf.Display, WindowsNative.Cursor(), shelf.Handle));
+                Console.WriteLine("Tick 门控：revealed={0}, capturing={1}, switching={2}, queued={3}, busy={4}, viewingTracked={5}, appearance={6}, basket={7}, texts={8}, mouseDown={9}",
+                    shelf.Revealed, shelf.Capturing, typeof(ShelfWindow).GetField("switchingDisplay", flags).GetValue(shelf),
+                    typeof(ShelfWindow).GetField("displayMoveQueued", flags).GetValue(shelf), controller.Gallery.Items.Any(item => shelf.CardFor(item.Path).Busy),
+                    typeof(ShelfWindow).GetField("viewingName", flags).GetValue(shelf) != null, shelf.ChoosingAppearance, shelf.ChoosingBasket, shelf.ChoosingTexts,
+                    (WindowsNative.GetAsyncKeyState(1) & 0x8000) != 0);
                 tick.Invoke(shelf, new object[] { null, EventArgs.Empty });
                 Check(!shelf.Revealed, "最大化窗口右上角触发避让");
                 double start = slide.Y;
@@ -1223,7 +1399,7 @@ namespace ScreenLine.Tests
                 tick.Invoke(shelf, new object[] { null, EventArgs.Empty });
                 Check(shelf.Revealed, "普通窗口右上角不会收起图绳");
             }
-            finally { backdrop.Close(); }
+            finally { backdrop.Close(); shelf.SetRevealOnTopHover(previousTopHover); }
         }
 
         static async Task CheckBasketMotion(StateStore store)
@@ -1843,8 +2019,7 @@ namespace ScreenLine.Tests
             }
             finally { hint.IsOpen = false; }
             Point center = card.Surface.PointToScreen(new Point(card.Surface.ActualWidth / 2, card.Surface.ActualHeight / 2));
-            SetCursorPos((int)center.X, (int)center.Y);
-            await Task.Delay(120);
+            await MovePointerForClick(card.Surface);
             mouse_event(8, 0, 0, 0, UIntPtr.Zero);
             mouse_event(16, 0, 0, 0, UIntPtr.Zero);
             await Until(() => card.ActionMenu.IsOpen && card.ActionMenu.ActualHeight > 0);
@@ -1897,7 +2072,7 @@ namespace ScreenLine.Tests
             Point bottomRight = trayMenu.PointToScreen(new Point(trayMenu.ActualWidth, trayMenu.ActualHeight));
             Check(topLeft.X >= screen.Bounds.Left && topLeft.Y >= screen.Bounds.Top
                 && bottomRight.X <= screen.Bounds.Right + 1 && bottomRight.Y <= screen.Bounds.Bottom + 1, "屏幕右下角的托盘菜单完整显示，没有超出屏幕");
-            Check(trayMenu.MoreMenu.Items.OfType<MenuItem>().Count(x => x.IsEnabled) == 8
+            Check(trayMenu.MoreMenu.Items.OfType<MenuItem>().Count(x => x.IsEnabled) == 9
                 && trayMenu.MoreMenu.Items.OfType<MenuItem>().Any(item => item.Header as string == "区域截图")
                 && trayMenu.MoreMenu.Items.OfType<MenuItem>().Any(item => item.Header as string == "截图快捷键…"), "更多操作保留原入口并提供区域截图与快捷键设置");
             Check(trayMenu.ScreenButton.IsVisible && trayMenu.ScreenMode.Text == "跟随鼠标", "显示屏幕入口直接呈现当前模式");
@@ -1951,8 +2126,25 @@ namespace ScreenLine.Tests
             Check(trayMenu.IsOpen, "展开更多操作时主面板保持可见");
             var moreBounds = new Rect(more.PointToScreen(new Point()), more.PointToScreen(new Point(more.ActualWidth, more.ActualHeight)));
             Check(screen.Bounds.Contains((int)moreBounds.Left, (int)moreBounds.Top) && moreBounds.Right <= screen.Bounds.Right + 1 && moreBounds.Bottom <= screen.Bounds.Bottom + 1, "更多操作靠近屏幕边缘也完整显示");
+            var topHover = more.Items.OfType<MenuItem>().Single(item => item.Header as string == "鼠标移至顶部时展开");
+            Check(topHover.IsCheckable && topHover.IsChecked, "顶部悬停展开菜单默认勾选");
+            await ClickMenu(topHover);
+            Check(!topHover.IsChecked && !store.State.RevealOnTopHover && !new StateStore(store.Root).State.RevealOnTopHover,
+                "实际点击关闭顶部悬停展开并保存");
+            await ReopenMoreMenu(screen);
+            await ClickMenu(topHover);
+            Check(topHover.IsChecked && store.State.RevealOnTopHover && new StateStore(store.Root).State.RevealOnTopHover,
+                "实际点击重新开启顶部悬停展开并保存");
+            await ReopenMoreMenu(screen);
+            using (var locked = new FileStream(Path.Combine(store.Root, "state.json"), FileMode.Open, FileAccess.Read, FileShare.Read))
+                await ClickMenu(topHover);
+            Check(topHover.IsChecked && store.State.RevealOnTopHover && new StateStore(store.Root).State.RevealOnTopHover,
+                "顶部悬停设置保存失败后恢复勾选和配置");
+            Check(Application.Current.Windows.OfType<LightNotice>().Any(), "顶部悬停设置保存失败时显示提示");
+            foreach (var notice in Application.Current.Windows.OfType<LightNotice>().ToArray()) notice.Close();
+            await ReopenMoreMenu(screen);
             await ClickMenu(more.Items.OfType<MenuItem>().Single(item => item.Header as string == "全部取下（保留文件）"));
-            await Until(() => !more.IsOpen && controller.Gallery.Items.Count == 0);
+            await Until(() => !more.IsOpen && controller.Gallery.Items.Count == 0, "保存失败后的全部取下");
             Check(File.Exists(path) && !trayMenu.IsOpen, "更多操作中的全部取下仍保留原图，操作后关闭菜单");
             SetCursorPos(screen.WorkingArea.Right - 35, screen.WorkingArea.Bottom + 12);
             controller.ShowTrayMenu();
@@ -2012,6 +2204,18 @@ namespace ScreenLine.Tests
                 "实际鼠标悬停子菜单并取下全部，图片仍保留在篮子和磁盘");
         }
 
+        static async Task ReopenMoreMenu(Forms.Screen screen)
+        {
+            var trayMenu = controller.TrayMenu;
+            trayMenu.Close(); await Task.Delay(80);
+            int x = screen.WorkingArea.Right - 35, y = Math.Min(screen.Bounds.Bottom - 1, screen.WorkingArea.Bottom + 12);
+            if (!SetCursorPos(x, y)) throw new Exception("重开托盘前定位失败：" + Marshal.GetLastWin32Error());
+            controller.ShowTrayMenu();
+            await Until(() => trayMenu.IsOpen && trayMenu.ActualHeight > 0, "重新打开托盘");
+            await ClickMenu(trayMenu.MoreButton);
+            await Until(() => trayMenu.MoreMenu.IsOpen && trayMenu.MoreMenu.ActualHeight > 0, "重新打开更多操作");
+        }
+
         static async Task ClickMenu(FrameworkElement entry)
         {
             var toggle = entry as CheckBox;
@@ -2028,9 +2232,7 @@ namespace ScreenLine.Tests
                 ((System.Windows.Automation.Provider.IInvokeProvider)peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
                 await Task.Delay(100); return;
             }
-            Point center = entry.PointToScreen(new Point(entry.ActualWidth / 2, entry.ActualHeight / 2));
-            SetCursorPos((int)center.X, (int)center.Y);
-            await Task.Delay(100);
+            await MovePointerForClick(entry);
             mouse_event(2, 0, 0, 0, UIntPtr.Zero);
             mouse_event(4, 0, 0, 0, UIntPtr.Zero);
             await Task.Delay(120);
@@ -2113,12 +2315,13 @@ namespace ScreenLine.Tests
             Console.WriteLine("动效预览帧：" + directory);
         }
 
-        static async Task Until(Func<bool> condition)
+        static async Task Until(Func<bool> condition, string stage = null)
         {
             DateTime deadline = DateTime.UtcNow.AddSeconds(7);
             while (!condition())
             {
-                if (DateTime.UtcNow >= deadline) throw new Exception("等待结果超时，当前图片数量：" + controller.Gallery.Items.Count
+                if (DateTime.UtcNow >= deadline) throw new Exception((stage == null ? "" : "[" + stage + "] ") + "等待结果超时，当前图片数量：" + controller.Gallery.Items.Count
+                    + "，托盘=" + controller.TrayMenu.IsOpen + "，更多=" + controller.TrayMenu.MoreMenu.IsOpen
                     + "，展开：" + controller.Shelf.Revealed + "，鼠标命中：" + WindowFromPoint(WindowsNative.Cursor())
                     + "，绳子窗口：" + controller.Shelf.Handle
                     + "，鼠标位置：" + WindowsNative.Cursor().X + "," + WindowsNative.Cursor().Y
