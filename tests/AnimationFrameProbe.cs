@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows;
@@ -18,14 +19,19 @@ namespace ScreenLine.Tests
     {
         const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
         static ShelfWindow shelf;
-        static bool snapshots;
+        static bool snapshots, fullscreen, stress;
         static int checks;
+        [DllImport("user32.dll")] static extern uint GetGuiResources(IntPtr process, uint flags);
+        [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr window);
+        [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr window, IntPtr dc);
+        [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr destination, int x, int y, int width, int height, IntPtr source, int sourceX, int sourceY, uint operation);
 
         [STAThread]
         static void Main(string[] args)
         {
             Console.OutputEncoding = System.Text.Encoding.UTF8;
             snapshots = args.Contains("--snapshots");
+            fullscreen = args.Contains("--fullscreen"); stress = args.Contains("--stress");
             var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
             LightTheme.Install(app);
             IntPtr foreground = WindowsNative.GetForegroundWindow();
@@ -37,15 +43,16 @@ namespace ScreenLine.Tests
                     context = new Window { Width = 640, Height = 360, Title = "图绳", ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.CenterScreen };
                     context.Show(); WindowsNative.ActivateEditor(new WindowInteropHelper(context).Handle);
                     var results = new List<object>();
-                    foreach (int count in snapshots ? new[] { 6 } : new[] { 6, 49 })
+                    foreach (int count in fullscreen || stress ? new[] { 49 } : snapshots ? new[] { 6 } : new[] { 6, 49 })
                     {
                         var gallery = await Open(count);
-                        foreach (var size in new[] { new Size(1280, 720), new Size(600, 1000), new Size(shelf.Display.Bounds.Width, shelf.Display.Bounds.Height) })
+                        foreach (var size in fullscreen || stress ? new[] { new Size(shelf.Display.Bounds.Width, shelf.Display.Bounds.Height) } : new[] { new Size(1280, 720), new Size(600, 1000), new Size(shelf.Display.Bounds.Width, shelf.Display.Bounds.Height) })
                         {
                             results.Add(await Measure(gallery, size));
                             if (snapshots) break;
                         }
                         if (count == 49 || snapshots) CheckFlightDetail(gallery);
+                        if (count == 49) await CheckCaptureLifecycle(gallery);
                         shelf.Reveal(false, false, 0); await Task.Delay(350);
                         Check(!shelf.Animating && !shelf.MotionWindows.Any(), "收起后停止动画并清理飞行窗口");
                         shelf.Close(); shelf = null;
@@ -112,16 +119,21 @@ namespace ScreenLine.Tests
             var startup = new List<double>();
             var duration = new List<double>();
             int frames = 0, calls = 0;
+            double drawMs = 0, updateMs = 0, waitMs = 0;
+            int repeats = stress ? 60 : fullscreen ? 12 : 5;
             string path = Picture(gallery.Store.Root, "incoming-" + size.Width + "x" + size.Height, (int)size.Width, (int)size.Height);
             using (var process = Process.GetCurrentProcess())
             {
                 TimeSpan cpu = process.TotalProcessorTime;
+                uint gdiBefore = GetGuiResources(process.Handle, 0);
+                long peakPrivate = process.PrivateMemorySize64, peakWorking = process.WorkingSet64;
                 var total = Stopwatch.StartNew();
-                for (int repeat = 0; repeat < 5; repeat++)
+                for (int repeat = 0; repeat < repeats; repeat++)
                 {
                     gallery.Add(path, ImageContent.Read(path, false));
                     var item = gallery.Items.Last(); var card = shelf.CardFor(item.Path);
                     var screen = shelf.Display.Bounds;
+                    long startedTicks = Stopwatch.GetTimestamp();
                     var clock = Stopwatch.StartNew();
                     shelf.ShowNewCapture(item, new Point(screen.Right - 120, screen.Bottom - 150));
                     var flight = shelf.MotionWindows.Single();
@@ -129,45 +141,102 @@ namespace ScreenLine.Tests
                     flight.Closed += delegate { done.TrySetResult(true); };
                     double last = -1;
                     int captured = 0;
+                    bool visibleChecked = false;
+                    bool screenVisible = false;
+                    double lastMemory = -100;
                     TimeSpan stamp = TimeSpan.MinValue;
                     EventHandler rendering = delegate(object sender, EventArgs args)
                     {
-                        calls++;
-                        // 按合成时间去重，仅统计落位前的动画帧，回调次数不等于显示器呈现帧数。
-                        var time = ((RenderingEventArgs)args).RenderingTime;
-                        if (time == stamp || !card.Flying) return;
-                        stamp = time;
-                        double now = clock.Elapsed.TotalMilliseconds;
-                        if (snapshots && repeat == 0 && gallery.Items.Count == 7 && size.Width == 1280 && now >= 180 + captured * 300 && captured < 2)
+                        try
                         {
-                            var bitmap = Snapshot(flight);
-                            var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
-                            using (var output = File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "flight-" + captured++ + ".png"))) encoder.Save(output);
+                            calls++;
+                            // 按合成时间去重，仅统计落位前的动画帧，回调次数不等于显示器呈现帧数。
+                            var time = ((RenderingEventArgs)args).RenderingTime;
+                            if (time == stamp || !card.Flying) return;
+                            stamp = time;
+                            double now = clock.Elapsed.TotalMilliseconds;
+                            if (!visibleChecked && repeat == 0 && now > 400 && flight.CaptureRenderer != null && flight.CaptureRenderer.Failure == null)
+                            {
+                                Point point = flight.PointToScreen(flight.CaptureRenderer.SamplePoint);
+                                using (var sample = new System.Drawing.Bitmap(13, 13, System.Drawing.Imaging.PixelFormat.Format24bppRgb))
+                                using (var painter = System.Drawing.Graphics.FromImage(sample))
+                                {
+                                    CopyScreen(painter, (int)point.X - 6, (int)point.Y - 6, 13, 13);
+                                    bool blue = false;
+                                    for (int y = 0; y < 13; y++) for (int x = 0; x < 13; x++)
+                                    { var color = sample.GetPixel(x, y); blue |= Math.Abs(color.R - 70) < 15 && Math.Abs(color.G - 130) < 15 && Math.Abs(color.B - 180) < 15; }
+                                    screenVisible = blue;
+                                    if (!blue)
+                                    {
+                                        using (var desktop = new System.Drawing.Bitmap(screen.Width, screen.Height, System.Drawing.Imaging.PixelFormat.Format24bppRgb))
+                                        using (var capture = System.Drawing.Graphics.FromImage(desktop))
+                                        {
+                                            CopyScreen(capture, screen.Left, screen.Top, screen.Width, screen.Height);
+                                            desktop.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "fps60-desktop.png"));
+                                        }
+                                        var snapshot = Snapshot(flight); var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(snapshot));
+                                        using (var output = File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "fps60-buffer.png"))) encoder.Save(output);
+                                        Console.WriteLine("屏幕采样位置：" + point);
+                                    }
+                                }
+                                visibleChecked = true;
+                            }
+                            if (now - lastMemory >= 100)
+                            {
+                                lastMemory = now; process.Refresh();
+                                peakPrivate = Math.Max(peakPrivate, process.PrivateMemorySize64);
+                                peakWorking = Math.Max(peakWorking, process.WorkingSet64);
+                            }
+                            if (snapshots && repeat == 0 && gallery.Items.Count == 7 && size.Width == 1280 && now >= 180 + captured * 300 && captured < 2)
+                            {
+                                var bitmap = Snapshot(flight);
+                                var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                                using (var output = File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "flight-" + captured++ + ".png"))) encoder.Save(output);
+                            }
+                            if (flight.CaptureRenderer != null && flight.CaptureRenderer.Failure == null) return;
+                            if (last >= 0) intervals.Add(now - last); else startup.Add(now);
+                            last = now; frames++;
                         }
-                        if (last >= 0) intervals.Add(now - last); else startup.Add(now);
-                        last = now; frames++;
+                        catch (Exception error) { done.TrySetException(error); }
                     };
                     CompositionTarget.Rendering += rendering;
                     try
                     {
                         Check(await Task.WhenAny(done.Task, Task.Delay(3000)) == done.Task, "飞行动画按时结束");
+                        await done.Task;
                         duration.Add(clock.Elapsed.TotalMilliseconds);
+                        if (flight.CaptureRenderer != null)
+                        {
+                            if (repeat == 0) Check(visibleChecked && screenVisible, "截图动画实际出现在屏幕上");
+                            Check(flight.CaptureRenderer.Failure == null, "原生截图绘制成功：" + flight.CaptureRenderer.Failure);
+                            double[] presented = flight.CaptureRenderer.Intervals;
+                            intervals.AddRange(presented); frames += presented.Length + 1;
+                            startup.Add((flight.CaptureRenderer.FirstPresentationTicks - startedTicks) * 1000.0 / Stopwatch.Frequency);
+                            var timing = flight.CaptureRenderer.Timings; drawMs += timing[0]; updateMs += timing[1]; waitMs += timing[2];
+                        }
                         Check(!card.Flying && card.Opacity > 0 && !shelf.MotionWindows.Any(), "落位后原卡片可见且临时窗口已清理");
                         Check(card.Grip.IsEnabled && gallery.Contains(path) && File.Exists(path), "落位后夹子和原图可继续使用");
                     }
                     finally { CompositionTarget.Rendering -= rendering; flight.Close(); }
                     gallery.Remove(item); await Task.Delay(150);
+                    // 首次绘制会初始化 WPF 的字体和画刷缓存，后续截图应保持资源数稳定。
+                    if (repeat == 0) gdiBefore = GetGuiResources(process.Handle, 0);
                 }
                 process.Refresh();
+                Check(CaptureFlightRenderer.ActiveCount == 0, "飞行结束后释放全部原生缓冲区和绘制线程");
+                uint gdiAfter = GetGuiResources(process.Handle, 0);
+                Check(gdiAfter <= gdiBefore + 4, "连续截图不累积 GDI 资源：" + gdiBefore + "→" + gdiAfter);
                 Check(intervals.Count > 0, "采集到上绳动画的实际更新帧");
                 var result = new {
-                    images = gallery.Items.Count + 1, width = size.Width, height = size.Height, repeats = 5, frames, calls,
+                    images = gallery.Items.Count + 1, width = size.Width, height = size.Height, repeats, frames, calls,
                     fps = Math.Round(intervals.Count * 1000.0 / intervals.Sum(), 2),
                     p95Ms = Percentile(intervals, 0.95), maxMs = Math.Round(intervals.Max(), 2),
                     over25Ms = intervals.Count(x => x > 25), over50Ms = intervals.Count(x => x > 50),
                     startupP95Ms = Percentile(startup, 0.95), durationP95Ms = Percentile(duration, 0.95),
                     cpuPercent = Math.Round((process.TotalProcessorTime - cpu).TotalMilliseconds / total.Elapsed.TotalMilliseconds / Environment.ProcessorCount * 100, 2),
-                    privateMB = Math.Round(process.PrivateMemorySize64 / 1048576.0, 1)
+                    peakPrivateMB = Math.Round(peakPrivate / 1048576.0, 1), peakWorkingMB = Math.Round(peakWorking / 1048576.0, 1),
+                    privateMB = Math.Round(process.PrivateMemorySize64 / 1048576.0, 1), gdiBefore, gdiAfter,
+                    drawMs = Math.Round(drawMs / repeats, 2), updateMs = Math.Round(updateMs / repeats, 2), waitMs = Math.Round(waitMs / repeats, 2)
                 };
                 Console.WriteLine(new JavaScriptSerializer().Serialize(result)); return result;
             }
@@ -177,8 +246,19 @@ namespace ScreenLine.Tests
         {
             samples.Sort(); return Math.Round(samples[(int)Math.Ceiling(samples.Count * fraction) - 1], 2);
         }
-        static RenderTargetBitmap Snapshot(Window window)
+        static void CopyScreen(System.Drawing.Graphics graphics, int x, int y, int width, int height)
         {
+            IntPtr screen = GetDC(IntPtr.Zero), target = graphics.GetHdc();
+            try { if (!BitBlt(target, 0, 0, width, height, screen, x, y, 0x40CC0020)) throw new System.ComponentModel.Win32Exception(); }
+            finally { graphics.ReleaseHdc(target); ReleaseDC(IntPtr.Zero, screen); }
+        }
+        static BitmapSource Snapshot(Window window)
+        {
+            var flight = window as ShotFlight;
+            if (flight != null)
+            {
+                var frame = flight.CaptureFrame(); if (frame != null) return frame;
+            }
             double scale = WindowsNative.MonitorScale(shelf.Display);
             var bitmap = new RenderTargetBitmap((int)Math.Ceiling(window.ActualWidth * scale), (int)Math.Ceiling(window.ActualHeight * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
             bitmap.Render(window); return bitmap;
@@ -215,6 +295,42 @@ namespace ScreenLine.Tests
                 Check(error < 60, "大图飞行缓存保留原始细线，像素平均误差：" + error);
             }
             finally { flight.Close(); gallery.Remove(item); }
+        }
+
+        static async Task CheckCaptureLifecycle(Gallery gallery)
+        {
+            var appearance = shelf.Appearance;
+            var bounds = shelf.Display.Bounds;
+            var origin = new Point(bounds.Right - 100, bounds.Bottom - 100);
+            string path = Picture(gallery.Store.Root, "cancel-flight", bounds.Width, bounds.Height);
+            gallery.Add(path, ImageContent.Read(path, false)); var item = gallery.Items.Last();
+            for (int i = 0; i < 2; i++)
+            {
+                shelf.Reveal(true, true, 120); shelf.ShowNewCapture(item, origin); await Task.Delay(100);
+                if (i == 1) { shelf.ApplyTheme(LineTheme.FromId("graphite")); await Task.Delay(80); }
+                Check(shelf.MotionWindows.Any(), "取消前截图处于飞行状态");
+                shelf.Reveal(false, false, 0); await NativeReleased();
+                Check(!shelf.MotionWindows.Any() && !shelf.CardFor(path).Flying, "取消和途中换肤不遗留动画窗口");
+                await Task.Delay(250);
+            }
+            gallery.Remove(item); shelf.ApplyTheme(appearance); shelf.Reveal(true, true, 120); await Task.Delay(350);
+            var added = new List<CaptureItem>();
+            for (int i = 0; i < 2; i++)
+            {
+                path = Picture(gallery.Store.Root, "concurrent-flight-" + i, bounds.Width, bounds.Height);
+                gallery.Add(path, ImageContent.Read(path, false)); added.Add(gallery.Items.Last());
+                shelf.ShowNewCapture(added.Last(), origin);
+            }
+            Check(shelf.MotionWindows.Count() == 2, "连续两张全屏截图可同时上绳");
+            await Task.Delay(1300); await NativeReleased();
+            Check(!shelf.MotionWindows.Any() && added.All(entry => !shelf.CardFor(entry.Path).Flying), "同时上绳后均落位并释放绘制资源");
+            foreach (var entry in added) gallery.Remove(entry);
+        }
+
+        static async Task NativeReleased()
+        {
+            for (int i = 0; i < 100 && CaptureFlightRenderer.ActiveCount != 0; i++) await Task.Delay(20);
+            Check(CaptureFlightRenderer.ActiveCount == 0, "原生截图绘制资源已释放");
         }
         static void Check(bool condition, string message) { if (!condition) throw new Exception(message); checks++; }
     }

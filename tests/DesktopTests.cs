@@ -2288,7 +2288,11 @@ namespace ScreenLine.Tests
                     painter.DrawRectangle(new SolidColorBrush(Color.FromRgb(238, 242, 248)), null, new Rect(0, 0, width, height));
                     painter.DrawRectangle(new VisualBrush(shelf), null, new Rect(0, 0, width, shelf.ActualHeight));
                     foreach (var flight in shelf.MotionWindows)
-                        painter.DrawRectangle(new VisualBrush(flight), null, new Rect(0, 0, flight.ActualWidth, flight.ActualHeight));
+                    {
+                        var picture = flight.CaptureFrame();
+                        if (picture != null) painter.DrawImage(picture, new Rect(0, 0, flight.ActualWidth, flight.ActualHeight));
+                        else painter.DrawRectangle(new VisualBrush(flight), null, new Rect(0, 0, flight.ActualWidth, flight.ActualHeight));
+                    }
                     foreach (var pin in shelf.PinWindows)
                     {
                         pin.UpdateLayout();

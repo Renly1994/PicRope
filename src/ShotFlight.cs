@@ -25,10 +25,13 @@ namespace ScreenLine
         readonly Stopwatch clock = new Stopwatch();
         readonly Action landed;
         readonly Func<Rect> basketTarget;
+        CaptureFlightRenderer captureRenderer;
         Rect origin;
         bool completed, arrived;
         public bool Falling { get; private set; }
         public bool Collecting { get { return basketTarget != null; } }
+        internal CaptureFlightRenderer CaptureRenderer { get { return captureRenderer; } }
+        internal BitmapSource CaptureFrame() { return captureRenderer == null || captureRenderer.Failure != null ? null : captureRenderer.Snapshot(); }
 
         public ShotFlight(Forms.Screen screen, ShotCard card, Rect origin, bool falling, Action landed, BitmapSource image = null, Func<Rect> basketTarget = null)
         {
@@ -86,10 +89,26 @@ namespace ScreenLine
                 }
                 clock.Start();
                 Render(null, EventArgs.Empty);
+                if (!Falling && !Collecting && image == null)
+                {
+                    try
+                    {
+                        captureRenderer = new CaptureFlightRenderer(handle, screen.Bounds.Width, screen.Bounds.Height, scale, this.origin,
+                            Local(card.PhotoRect()), card.Tilt, (BitmapSource)photo.Source, ClipPicture(scale), delegate { return clock.Elapsed.TotalSeconds; });
+                        stage.Opacity = 0;
+                    }
+                    catch (System.Runtime.InteropServices.ExternalException) { }
+                }
                 CompositionTarget.Rendering += Render;
+            };
+            Loaded += delegate
+            {
+                if (captureRenderer != null && captureRenderer.Failure == null)
+                { clock.Restart(); captureRenderer.UpdateTarget(Local(card.PhotoRect()), 0); Hide(); captureRenderer.Start(); }
             };
             Closed += delegate
             {
+                if (captureRenderer != null) captureRenderer.Dispose();
                 CompositionTarget.Rendering -= Render;
                 Complete();
             };
@@ -100,7 +119,19 @@ namespace ScreenLine
             return new Rect(PointFromScreen(rectangle.TopLeft), PointFromScreen(rectangle.BottomRight));
         }
 
-        public void ApplyTheme(LineTheme theme) { clip.Apply(theme, card.ColorIndex); }
+        public void ApplyTheme(LineTheme theme)
+        {
+            clip.Apply(theme, card.ColorIndex);
+            if (captureRenderer != null && captureRenderer.Failure == null) captureRenderer.UpdateClip(ClipPicture(VisualTreeHelper.GetDpi(this).DpiScaleX));
+        }
+
+        BitmapSource ClipPicture(double scale)
+        {
+            var glyph = new ClothesClip(clip.Appearance, card.ColorIndex);
+            glyph.Measure(new Size(16, 30)); glyph.Arrange(new Rect(0, 0, 16, 30));
+            var bitmap = new RenderTargetBitmap((int)Math.Ceiling(16 * scale), (int)Math.Ceiling(30 * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
+            bitmap.Render(glyph); bitmap.Freeze(); return bitmap;
+        }
 
         void Complete()
         {
@@ -114,6 +145,14 @@ namespace ScreenLine
         {
             if (!Falling && !Collecting && card.IsDisposed) { Close(); return; }
             double seconds = clock.Elapsed.TotalSeconds;
+            if (captureRenderer != null && captureRenderer.Failure == null)
+            {
+                captureRenderer.UpdateTarget(Local(card.PhotoRect()), seconds);
+                if (seconds >= 0.65) Complete();
+                if (seconds >= 0.81) Close();
+                return;
+            }
+            if (captureRenderer != null) { stage.Opacity = 1; if (!IsVisible) Show(); }
             if (Collecting) { RenderCollection(Math.Min(1, seconds / 0.64)); return; }
             double progress = Math.Min(1, seconds / (Falling ? 0.55 : 0.65));
             // 五次曲线让起飞与抵达的速度、加速度都平滑归零。
