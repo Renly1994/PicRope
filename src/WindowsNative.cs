@@ -193,10 +193,11 @@ namespace ScreenLine
     internal sealed class WindowsEvents : IDisposable
     {
         readonly HwndSource source;
-        public readonly bool ShortcutAvailable;
+        public bool ShortcutAvailable { get; private set; }
         public bool CaptureShortcutAvailable { get; private set; }
-        uint captureModifiers, captureKey;
-        int captureId = 2;
+        uint toggleModifiers, toggleKey, captureModifiers, captureKey;
+        int toggleId = 1, captureId = 3;
+        bool disposed;
         public event Action ClipboardChanged;
         public event Action ToggleRequested;
         public event Action ExitRequested;
@@ -204,37 +205,66 @@ namespace ScreenLine
 
         public bool RegisterCapture(uint modifiers, uint key)
         {
-            if (modifiers == 0 || (modifiers & ~15u) != 0 || key < 0x20 || key > 0xFE) return false;
-            if (CaptureShortcutAvailable && modifiers == captureModifiers && key == captureKey) return true;
-            int next = captureId == 2 ? 3 : 2;
+            return RegisterCapture(modifiers, key, null);
+        }
+
+        public bool RegisterToggle(uint modifiers, uint key) { return RegisterToggle(modifiers, key, null); }
+        internal bool RegisterToggle(uint modifiers, uint key, Action save) { return RegisterShortcut(true, modifiers, key, save); }
+        internal bool RegisterCapture(uint modifiers, uint key, Action save) { return RegisterShortcut(false, modifiers, key, save); }
+
+        bool RegisterShortcut(bool toggle, uint modifiers, uint key, Action save)
+        {
+            if (disposed || !ShortcutRules.IsValid(modifiers, key)) return false;
+            bool available = toggle ? ShortcutAvailable : CaptureShortcutAvailable;
+            uint currentModifiers = toggle ? toggleModifiers : captureModifiers, currentKey = toggle ? toggleKey : captureKey;
+            if ((toggle ? CaptureShortcutAvailable : ShortcutAvailable)
+                && modifiers == (toggle ? captureModifiers : toggleModifiers) && key == (toggle ? captureKey : toggleKey)) return false;
+            if (available && modifiers == currentModifiers && key == currentKey) { if (save != null) save(); return true; }
+            int previous = toggle ? toggleId : captureId;
+            int next = !available ? previous : (toggle ? (previous == 1 ? 4 : 1) : (previous == 2 ? 3 : 2));
             if (!WindowsNative.RegisterHotKey(source.Handle, next, modifiers | 0x4000, key)) return false;
-            if (CaptureShortcutAvailable) WindowsNative.UnregisterHotKey(source.Handle, captureId);
-            captureId = next; captureModifiers = modifiers; captureKey = key; CaptureShortcutAvailable = true;
+            // 保存期间旧绑定仍被保留，失败时只释放刚注册的新键。
+            try { if (save != null) save(); }
+            catch { WindowsNative.UnregisterHotKey(source.Handle, next); throw; }
+            if (available) WindowsNative.UnregisterHotKey(source.Handle, previous);
+            if (toggle) { toggleId = next; toggleModifiers = modifiers; toggleKey = key; ShortcutAvailable = true; }
+            else { captureId = next; captureModifiers = modifiers; captureKey = key; CaptureShortcutAvailable = true; }
             return true;
         }
 
-        public WindowsEvents()
+        public WindowsEvents() : this(3, (uint)'T') { }
+
+        public WindowsEvents(uint modifiers, uint key)
         {
             source = new HwndSource(new HwndSourceParameters(WindowsNative.MessageWindow) { ParentWindow = WindowsNative.MessageParent });
             source.AddHook(Receive);
             if (!WindowsNative.AddClipboardFormatListener(source.Handle)) throw new System.ComponentModel.Win32Exception();
-            ShortcutAvailable = WindowsNative.RegisterHotKey(source.Handle, 1, 0x4003, (uint)'T');
+            RegisterToggle(modifiers, key);
         }
 
         IntPtr Receive(IntPtr window, int message, IntPtr w, IntPtr l, ref bool handled)
         {
             if (message == 0x031D && ClipboardChanged != null) ClipboardChanged();
-            if ((message == WindowsNative.ShowMessage || message == 0x0312 && w.ToInt32() == 1) && ToggleRequested != null) ToggleRequested();
-            if (message == 0x0312 && w.ToInt32() == captureId && CaptureRequested != null) CaptureRequested();
+            if ((message == WindowsNative.ShowMessage || message == 0x0312 && ShortcutAvailable && w.ToInt32() == toggleId && Matches(l, toggleModifiers, toggleKey)) && ToggleRequested != null) ToggleRequested();
+            if (message == 0x0312 && CaptureShortcutAvailable && w.ToInt32() == captureId && Matches(l, captureModifiers, captureKey) && CaptureRequested != null) CaptureRequested();
             if (message == WindowsNative.ExitMessage && ExitRequested != null) ExitRequested();
             return IntPtr.Zero;
         }
 
+        static bool Matches(IntPtr data, uint modifiers, uint key)
+        {
+            long value = data.ToInt64();
+            return (value & 15) == modifiers && ((value >> 16) & 0xFFFF) == key;
+        }
+
         public void Dispose()
         {
+            if (disposed) return;
+            disposed = true;
             WindowsNative.RemoveClipboardFormatListener(source.Handle);
-            if (ShortcutAvailable) WindowsNative.UnregisterHotKey(source.Handle, 1);
+            if (ShortcutAvailable) WindowsNative.UnregisterHotKey(source.Handle, toggleId);
             if (CaptureShortcutAvailable) WindowsNative.UnregisterHotKey(source.Handle, captureId);
+            ShortcutAvailable = CaptureShortcutAvailable = false;
             source.Dispose();
         }
     }

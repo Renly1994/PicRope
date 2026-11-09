@@ -223,6 +223,22 @@ namespace ScreenLine.Tests
                 Check(conflict.RegisterCapture(6, 0x7A), "可使用未冲突的组合键");
                 Check(!owner.RegisterCapture(6, 0x7A) && owner.CaptureShortcutAvailable, "改键冲突保留旧绑定");
                 Check(!owner.RegisterCapture(0, 0x41), "拒绝没有修饰键的全局快捷键");
+                Check(owner.RegisterToggle(6, 0x78), "可更改显隐快捷键");
+                Check(!owner.RegisterCapture(6, 0x78) && !owner.RegisterToggle(6, 0x7B), "截图与显隐快捷键不能使用同一组合键");
+                Check(!owner.RegisterCapture(3, 0x5B) && !owner.RegisterToggle(3, 0xA2), "两种快捷键均拒绝纯修饰键");
+                bool saved = false;
+                Check(owner.RegisterCapture(6, 0x7B, delegate { saved = true; }) && saved, "重复注册当前组合键仍执行保存");
+                bool saveFailed = false;
+                try { owner.RegisterCapture(6, 0x79, delegate { throw new IOException("模拟快捷键保存失败"); }); }
+                catch (IOException) { saveFailed = true; }
+                Check(saveFailed && owner.CaptureShortcutAvailable && !conflict.RegisterCapture(6, 0x7B), "保存失败时旧组合键仍被保留");
+                Check(conflict.RegisterCapture(6, 0x79), "保存失败后释放新组合键");
+                saved = false;
+                Check(owner.RegisterToggle(6, 0x77, delegate { saved = true; }) && saved, "显隐快捷键可在保存成功后切换绑定");
+                owner.Dispose(); owner.Dispose();
+                Check(!owner.ShortcutAvailable && !owner.CaptureShortcutAvailable
+                    && !owner.RegisterToggle(6, 0x78) && !owner.RegisterCapture(6, 0x7B), "重复释放安全，释放后不能重新注册");
+                Check(conflict.RegisterCapture(6, 0x7B) && conflict.RegisterToggle(6, 0x77), "释放后两种组合键均可被重新注册");
             }
             Check(controller.SetCaptureShortcut(6, 0x79), "通过设置入口更改截图快捷键");
             var restored = new StateStore(store.Root);
@@ -296,11 +312,20 @@ namespace ScreenLine.Tests
         static async Task CheckShortcutMessage()
         {
             controller.Shelf.Capturing = false;
+            var state = controller.Gallery.Store.State;
+            uint previousModifiers = state.CaptureModifiers, previousKey = state.CaptureKey;
+            Check(controller.SetCaptureShortcut(6, 0x7B) && controller.SetCaptureShortcut(6, 0x7A), "连续改键后复用消息编号");
             var events = (WindowsEvents)typeof(DesktopController).GetField("events", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(controller);
             int id = (int)typeof(WindowsEvents).GetField("captureId", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(events);
             var source = (System.Windows.Interop.HwndSource)typeof(WindowsEvents).GetField("source", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(events);
             int files = Directory.GetFiles(controller.Gallery.Store.Inbox).Length;
-            PostMessage(source.Handle, 0x312, new IntPtr(id), IntPtr.Zero); await Task.Delay(500);
+            PostMessage(source.Handle, 0x312, new IntPtr(id), IntPtr.Zero); await Task.Delay(80);
+            Check(controller.Capture == null, "缺少组合键信息的消息不触发截图");
+            PostMessage(source.Handle, 0x312, new IntPtr(id), new IntPtr(((long)previousKey << 16) | previousModifiers)); await Task.Delay(80);
+            Check(controller.Capture == null, "消息编号复用后旧组合键消息不触发截图");
+            PostMessage(source.Handle, 0x312, new IntPtr(id), new IntPtr(((long)state.CaptureKey << 16) | (state.CaptureModifiers ^ 1u))); await Task.Delay(80);
+            Check(controller.Capture == null, "修饰键不匹配的消息不触发截图");
+            PostMessage(source.Handle, 0x312, new IntPtr(id), new IntPtr(((long)state.CaptureKey << 16) | state.CaptureModifiers)); await Task.Delay(500);
             Check(controller.Capture != null && controller.Capture.IsVisible, "全局热键消息打开截图编辑界面");
             var first = controller.Capture; controller.ShowCapture(); await Task.Delay(50);
             Check(controller.Capture == first, "重复截图请求只保留一个窗口");
