@@ -212,6 +212,32 @@ namespace ScreenLine.Tests
                 var legacy = new StateStore(store.Root);
                 Check(legacy.State.RevealOnTopHover && !legacy.State.HoverPreview && legacy.State.Images.Single() == "旧截图.png");
             });
+            Run("显隐快捷键兼容旧配置，自定义组合键可保存恢复", delegate
+            {
+                var store = new StateStore(Path.Combine(root, "toggle-shortcut-profile"));
+                Check(store.State.ToggleModifiers == 3 && store.State.ToggleKey == (uint)'T');
+                store.State.ToggleModifiers = 6; store.State.ToggleKey = 0x78; store.Save();
+                var restored = new StateStore(store.Root);
+                Check(restored.State.ToggleModifiers == 6 && restored.State.ToggleKey == 0x78);
+                File.WriteAllText(Path.Combine(store.Root, "state.json"), "{\"Images\":[\"旧截图.png\"],\"CaptureModifiers\":6,\"CaptureKey\":123}");
+                restored = new StateStore(store.Root);
+                Check(restored.State.ToggleModifiers == 3 && restored.State.ToggleKey == (uint)'T'
+                    && restored.State.CaptureModifiers == 6 && restored.State.CaptureKey == 123 && restored.State.Images.Single() == "旧截图.png");
+            });
+            Run("无效显隐快捷键回退默认值并保留其他配置", delegate
+            {
+                var store = new StateStore(Path.Combine(root, "invalid-toggle-shortcut-profile"));
+                store.State.ToggleModifiers = 0; store.State.ToggleKey = 0x5B; store.State.Theme = "linen"; store.Save();
+                var restored = new StateStore(store.Root);
+                Check(restored.State.ToggleModifiers == 3 && restored.State.ToggleKey == (uint)'T' && restored.State.Theme == "linen");
+            });
+            Run("快捷键校验拒绝无修饰键、越界值和纯修饰键", delegate
+            {
+                Check(ShortcutRules.IsValid(3, (uint)'T') && ShortcutRules.IsValid(6, 0x7B));
+                Check(!ShortcutRules.IsValid(0, 0x41) && !ShortcutRules.IsValid(16, 0x41)
+                    && !ShortcutRules.IsValid(3, 0x1F) && !ShortcutRules.IsValid(3, 0xFF));
+                foreach (uint key in new uint[] { 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5 }) Check(!ShortcutRules.IsValid(3, key));
+            });
             Run("设置与中文路径可持久化并原子替换", delegate
             {
                 string profile = Path.Combine(root, "state-profile");

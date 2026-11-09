@@ -25,11 +25,22 @@ namespace ScreenLine
         public string LastUpdateNotification { get; set; }
         public uint CaptureModifiers { get; set; }
         public uint CaptureKey { get; set; }
+        public uint ToggleModifiers { get; set; }
+        public uint ToggleKey { get; set; }
         public List<string> Images { get; set; }
         public List<string> Collection { get; set; }
         public List<TextItem> Texts { get; set; }
 
-        public SavedState() { Images = new List<string>(); Collection = new List<string>(); Texts = new List<TextItem>(); Theme = "classic"; AutoHang = true; HoverPreview = true; RevealOnTopHover = true; CaptureModifiers = 3; CaptureKey = (uint)'S'; }
+        public SavedState() { Images = new List<string>(); Collection = new List<string>(); Texts = new List<TextItem>(); Theme = "classic"; AutoHang = true; HoverPreview = true; RevealOnTopHover = true; CaptureModifiers = 3; CaptureKey = (uint)'S'; ToggleModifiers = 3; ToggleKey = (uint)'T'; }
+    }
+
+    internal static class ShortcutRules
+    {
+        public static bool IsValid(uint modifiers, uint key)
+        {
+            return modifiers != 0 && (modifiers & ~15u) == 0 && key >= 0x20 && key <= 0xFE
+                && key != 0x5B && key != 0x5C && (key < 0xA0 || key > 0xA5);
+        }
     }
 
     internal sealed class StateStore
@@ -54,6 +65,7 @@ namespace ScreenLine
                 if (State.Images == null) State.Images = new List<string>();
                 if (State.Collection == null) State.Collection = new List<string>();
                 if (State.Texts == null) State.Texts = new List<TextItem>();
+                if (!ShortcutRules.IsValid(State.ToggleModifiers, State.ToggleKey)) { State.ToggleModifiers = 3; State.ToggleKey = (uint)'T'; }
             }
             catch (ArgumentException ex) { Log(ex); }
             catch (InvalidOperationException ex) { Log(ex); }
