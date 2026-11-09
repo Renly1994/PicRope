@@ -1,4 +1,4 @@
-param([switch]$FlickerProbe, [switch]$Portrait, [switch]$ScrollProbe, [switch]$ClipboardProbe, [switch]$BasketProbe, [switch]$BasketLayout, [switch]$InstalledBasket, [switch]$EditorProbe)
+param([switch]$FlickerProbe, [switch]$Portrait, [switch]$ScrollProbe, [switch]$ClipboardProbe, [switch]$BasketProbe, [switch]$BasketLayout, [switch]$InstalledBasket, [switch]$EditorProbe, [switch]$FrameProbe, [string[]]$ProbeArgs = @())
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $frameworkPath = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
@@ -16,14 +16,15 @@ $resources = @(Get-ChildItem -LiteralPath (Join-Path $buildPath 'runtime-assets'
 $resources += @(Get-ChildItem -LiteralPath (Join-Path $buildPath 'runtime-assets') -Filter 'envelope-*.png' | ForEach-Object { '/resource:' + $_.FullName + ',PicRope.Envelope.' + $_.BaseName.Substring(9) })
 $sources = (Get-ChildItem -LiteralPath (Join-Path $projectRoot 'src') -Filter '*.cs').FullName
 $icon = Join-Path $projectRoot 'src\assets\PicRope.ico'
-$testName = if ($FlickerProbe) { 'HoverFlickerProbe' } elseif ($ScrollProbe) { 'HoverScrollTests' } elseif ($ClipboardProbe) { 'ClipboardBasketProbe' } elseif ($BasketProbe) { 'BasketPerformanceTests' } elseif ($BasketLayout) { 'BasketLayoutTests' } elseif ($EditorProbe) { 'EditorResourceProbe' } else { 'HoverPreviewTests' }
+$testName = if ($FrameProbe) { 'AnimationFrameProbe' } elseif ($FlickerProbe) { 'HoverFlickerProbe' } elseif ($ScrollProbe) { 'HoverScrollTests' } elseif ($ClipboardProbe) { 'ClipboardBasketProbe' } elseif ($BasketProbe) { 'BasketPerformanceTests' } elseif ($BasketLayout) { 'BasketLayoutTests' } elseif ($EditorProbe) { 'EditorResourceProbe' } else { 'HoverPreviewTests' }
 if ($EditorProbe) { $references += '/r:System.Management.dll' }
-$manifest = if ($ScrollProbe) { "/win32manifest:$projectRoot\src\app.manifest" }
+$manifest = if ($ScrollProbe -or $FrameProbe) { "/win32manifest:$projectRoot\src\app.manifest" }
 & $compilerPath /nologo /target:exe /platform:x64 /codepage:65001 "/main:ScreenLine.Tests.$testName" "/out:$buildPath\$testName.exe" "/resource:$icon,PicRope.Icon" $manifest $resources $references $sources (Join-Path $PSScriptRoot ($testName + '.cs'))
 if ($LASTEXITCODE -ne 0) { throw '悬停预览测试构建失败' }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'src\App.config') -Destination (Join-Path $buildPath ($testName + '.exe.config'))
 Copy-Item -LiteralPath (Join-Path $projectRoot 'vendor\WebView2\Microsoft.Web.WebView2.Core.dll'),(Join-Path $projectRoot 'vendor\WebView2\Microsoft.Web.WebView2.Wpf.dll'),(Join-Path $projectRoot 'vendor\WebView2\WebView2Loader.dll') -Destination $buildPath
-if ($BasketProbe -and $InstalledBasket) { & (Join-Path $buildPath ($testName + '.exe')) --installed }
+if ($FrameProbe) { & (Join-Path $buildPath ($testName + '.exe')) @ProbeArgs }
+elseif ($BasketProbe -and $InstalledBasket) { & (Join-Path $buildPath ($testName + '.exe')) --installed }
 elseif ($FlickerProbe -and $Portrait) { & (Join-Path $buildPath ($testName + '.exe')) --portrait }
 else { & (Join-Path $buildPath ($testName + '.exe')) }
 if ($LASTEXITCODE -ne 0) { throw '悬停预览测试未通过' }

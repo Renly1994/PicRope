@@ -897,6 +897,7 @@ namespace ScreenLine
             Width = 164;
             Height = 178;
             RenderTransform = tilt;
+            CacheMode = new BitmapCache();
             Tilt = (item.Path.GetHashCode() & 7) * 0.7 - 2.45;
             Opacity = 0;
             Surface.RenderTransform = photoScale;

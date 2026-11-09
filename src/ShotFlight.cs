@@ -19,6 +19,8 @@ namespace ScreenLine
         readonly Image photo = new Image();
         readonly ClothesClip clip = new ClothesClip();
         readonly RotateTransform turn = new RotateTransform();
+        readonly ScaleTransform resize = new ScaleTransform(), clipScale = new ScaleTransform();
+        readonly TranslateTransform travel = new TranslateTransform();
         readonly DropShadowEffect shadow = new DropShadowEffect { BlurRadius = 14, ShadowDepth = 4 };
         readonly Stopwatch clock = new Stopwatch();
         readonly Action landed;
@@ -49,7 +51,14 @@ namespace ScreenLine
             IsHitTestVisible = false;
             Content = stage;
             stage.Children.Add(frame);
-            frame.RenderTransform = turn;
+            if (!Falling && !Collecting)
+            {
+                var transform = new TransformGroup();
+                transform.Children.Add(resize); transform.Children.Add(turn); transform.Children.Add(travel);
+                frame.RenderTransform = transform;
+                clip.RenderTransform = clipScale;
+            }
+            else frame.RenderTransform = turn;
             photo.Source = image ?? card.Item.Image.Thumbnail;
             photo.Stretch = Stretch.Fill;
             border.Child = photo;
@@ -64,6 +73,17 @@ namespace ScreenLine
                 WindowsNative.PassMouse(handle, true);
                 WindowsNative.SetWindowPos(handle, new IntPtr(-1), screen.Bounds.Left, screen.Bounds.Top, screen.Bounds.Width, screen.Bounds.Height, 0x10);
                 this.origin = Local(screenOrigin);
+                if (!Falling && !Collecting)
+                {
+                    var target = Local(card.PhotoRect());
+                    frame.Width = border.Width = target.Width; frame.Height = border.Height = target.Height;
+                    // 按落位尺寸绘制，并保留原图在飞行途中实际需要的像素密度。
+                    var source = (BitmapSource)photo.Source;
+                    double detail = Math.Max(source.PixelWidth / (Math.Max(1, target.Width - 14) * scale), source.PixelHeight / (Math.Max(1, target.Height - 14) * scale));
+                    double enlargement = Math.Max(this.origin.Width / target.Width, this.origin.Height / target.Height);
+                    double cacheScale = Math.Max(1, Math.Min(detail, enlargement));
+                    frame.CacheMode = new BitmapCache { RenderAtScale = image == null ? cacheScale : Math.Ceiling(cacheScale) };
+                }
                 clock.Start();
                 Render(null, EventArgs.Empty);
                 CompositionTarget.Rendering += Render;
@@ -115,21 +135,32 @@ namespace ScreenLine
                 chrome = 1;
                 Opacity = 1 - progress * progress;
             }
-            frame.Width = border.Width = width;
-            frame.Height = border.Height = height;
-            Canvas.SetLeft(frame, x - width / 2);
-            Canvas.SetTop(frame, y);
+            double scaleX = 1, scaleY = 1;
+            if (Falling)
+            {
+                frame.Width = border.Width = width; frame.Height = border.Height = height;
+                Canvas.SetLeft(frame, x - width / 2); Canvas.SetTop(frame, y);
+            }
+            else
+            {
+                scaleX = width / frame.Width; scaleY = height / frame.Height;
+                resize.ScaleX = scaleX; resize.ScaleY = scaleY;
+                travel.X = x - width / 2; travel.Y = y;
+            }
             turn.CenterX = width / 2;
             turn.CenterY = -12;
             border.Background = new SolidColorBrush(Color.FromArgb((byte)(245 * chrome), 255, 255, 255));
-            border.BorderThickness = new Thickness(chrome);
-            border.CornerRadius = new CornerRadius(12 * (Falling ? 1 : ease));
-            photo.Margin = new Thickness(6 * (Falling ? 1 : ease));
-            photo.Clip = new RectangleGeometry(new Rect(0, 0, Math.Max(1, width - photo.Margin.Left * 2 - chrome * 2), Math.Max(1, height - photo.Margin.Top * 2 - chrome * 2)), 7 * (Falling ? 1 : ease), 7 * (Falling ? 1 : ease));
+            border.BorderThickness = new Thickness(chrome / scaleX, chrome / scaleY, chrome / scaleX, chrome / scaleY);
+            double rounding = Falling ? 1 : ease;
+            border.CornerRadius = new CornerRadius(12 * rounding / Math.Max(scaleX, scaleY));
+            photo.Margin = new Thickness(6 * rounding / scaleX, 6 * rounding / scaleY, 6 * rounding / scaleX, 6 * rounding / scaleY);
+            photo.Clip = new RectangleGeometry(new Rect(0, 0, Math.Max(1, frame.Width - photo.Margin.Left * 2 - border.BorderThickness.Left * 2), Math.Max(1, frame.Height - photo.Margin.Top * 2 - border.BorderThickness.Top * 2)), 7 * rounding / scaleX, 7 * rounding / scaleY);
+            shadow.BlurRadius = 14 / Math.Max(scaleX, scaleY); shadow.ShadowDepth = 4 / scaleY;
             shadow.Opacity = 0.2 * chrome;
             clip.Opacity = chrome;
-            Canvas.SetLeft(clip, width / 2 - 8);
-            Canvas.SetTop(clip, -20);
+            clipScale.ScaleX = 1 / scaleX; clipScale.ScaleY = 1 / scaleY;
+            Canvas.SetLeft(clip, frame.Width / 2 - 8 / scaleX);
+            Canvas.SetTop(clip, -20 / scaleY);
             if (progress < 1) return;
             Complete();
             if (Falling) { Close(); return; }
