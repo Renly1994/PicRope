@@ -23,6 +23,7 @@ namespace ScreenLine
     {
         public const string Repository = "https://github.com/Renly1994/PicRope";
         public const string Endpoint = "https://api.github.com/repos/Renly1994/PicRope/releases/latest";
+        public const string BackupDownloadUrl = "https://pan.quark.cn/s/d1bdfe7b8d19";
         public static readonly string CurrentVersion = Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false)
             .Cast<AssemblyInformationalVersionAttribute>().Single().InformationalVersion;
         internal static readonly string Cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PicRope", "Updates");

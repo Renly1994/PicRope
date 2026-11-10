@@ -38,8 +38,14 @@ namespace ScreenLine
                     FontSize = 13, LineHeight = 22, TextWrapping = TextWrapping.Wrap, Foreground = LightTheme.Brush("#343D49") } });
             status.Text = "下载完成后重启更新，保留图片和设置。"; body.Children.Add(status); body.Children.Add(progress);
             var actions = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+            actions.ColumnDefinitions.Add(new ColumnDefinition()); actions.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var links = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left };
             var details = LightTheme.Button("查看发布说明", delegate { Process.Start(new ProcessStartInfo(release.Url) { UseShellExecute = true }); }, "quiet");
-            details.HorizontalAlignment = HorizontalAlignment.Left; details.Padding = new Thickness(0); actions.Children.Add(details);
+            details.Padding = new Thickness(0); details.Margin = new Thickness(0, 0, 12, 0); links.Children.Add(details);
+            var backup = LightTheme.Button("网盘下载", delegate { Process.Start(new ProcessStartInfo(AppUpdates.BackupDownloadUrl) { UseShellExecute = true }); }, "quiet");
+            backup.Padding = new Thickness(0); backup.Foreground = LightTheme.Brush("#2463AE");
+            backup.ToolTip = "使用夸克网盘下载，解压后运行 Install.cmd 更新。";
+            AutomationProperties.SetName(backup, "通过夸克网盘下载更新"); links.Children.Add(backup); actions.Children.Add(links);
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
             var later = LightTheme.Button("稍后", Close, "quiet"); later.Margin = new Thickness(0, 0, 8, 0); buttons.Children.Add(later);
             install = LightTheme.Button("下载并安装", delegate { }, "primary"); buttons.Children.Add(install);
@@ -68,7 +74,7 @@ namespace ScreenLine
                 catch (Exception error) { handingOff = false; status.Text = "更新未完成：" + error.Message; install.Content = downloaded == null ? "重试下载" : "重试安装"; }
                 finally { busy = false; install.IsEnabled = true; later.IsEnabled = close.IsEnabled = true; later.Content = "稍后"; if (!IsVisible && !handingOff && downloaded != null) AppUpdates.Discard(downloaded); }
             };
-            actions.Children.Add(buttons); body.Children.Add(actions);
+            Grid.SetColumn(buttons, 1); actions.Children.Add(buttons); body.Children.Add(actions);
             var card = LightTheme.Card(body); card.Padding = new Thickness(24); Content = card;
             Closed += delegate { cancellation.Cancel(); if (!handingOff && downloaded != null) AppUpdates.Discard(downloaded); };
         }
