@@ -214,7 +214,7 @@ namespace ScreenLine
             if (Arrived != null) Arrived(item, null);
         }
 
-        public async Task<string> AcceptCapture(BitmapSource picture)
+        public async Task<string> AcceptCapture(BitmapSource picture, Point? origin = null)
         {
             byte[] png = await Task.Run(() => ImageContent.EncodeClipboard(picture));
             ImageContent image = await Task.Run(() => ImageContent.Decode(png));
@@ -223,7 +223,7 @@ namespace ScreenLine
             await Task.Run(() => File.WriteAllBytes(path, png));
             if (disposed) return path;
             receipts.Accept(image.Fingerprint, CaptureSource.Clipboard, DateTime.UtcNow);
-            if (AutoHang) { gallery.Add(path, image); if (Arrived != null) Arrived(gallery.Items.Last(), null); }
+            if (AutoHang) { gallery.Add(path, image); if (Arrived != null) Arrived(gallery.Items.Last(), origin); }
             else gallery.Collect(path, image);
             var data = new DataObject(); data.SetImage(picture); data.SetData("PNG", new MemoryStream(png)); data.SetData(ClipboardRules.OwnFormat, "1");
             data.SetFileDropList(new System.Collections.Specialized.StringCollection { path });

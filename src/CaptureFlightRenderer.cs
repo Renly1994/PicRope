@@ -31,9 +31,9 @@ namespace ScreenLine
         [DllImport("gdi32.dll")] static extern IntPtr CreateRoundRectRgn(int left, int top, int right, int bottom, int ellipseWidth, int ellipseHeight);
         [DllImport("gdi32.dll")] static extern int SelectClipRgn(IntPtr dc, IntPtr region);
         [DllImport("gdi32.dll")] static extern bool PatBlt(IntPtr dc, int x, int y, int width, int height, uint operation);
+        [DllImport("gdi32.dll")] static extern bool GdiFlush();
         [DllImport("msimg32.dll")] static extern bool AlphaBlend(IntPtr target, int x, int y, int width, int height, IntPtr source, int sourceX, int sourceY, int sourceWidth, int sourceHeight, Blend blend);
-        [DllImport("user32.dll", SetLastError = true)] static extern bool UpdateLayeredWindow(IntPtr window, IntPtr destination, IntPtr position, IntPtr size, IntPtr source, ref Point offset, uint color, ref Blend blend, uint flags);
-        [DllImport("user32.dll", EntryPoint = "UpdateLayeredWindow", SetLastError = true)] static extern bool InitializeLayer(IntPtr window, IntPtr destination, ref Point position, ref LayerSize size, IntPtr source, ref Point offset, uint color, ref Blend blend, uint flags);
+        [DllImport("user32.dll", SetLastError = true)] static extern bool UpdateLayeredWindow(IntPtr window, IntPtr destination, ref Point position, ref LayerSize size, IntPtr source, ref Point offset, uint color, ref Blend blend, uint flags);
         [DllImport("dwmapi.dll")] static extern int DwmFlush();
         [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr CreateWindowEx(uint extendedStyle, string type, string title, uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr parameter);
         [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window, int command);
@@ -178,8 +178,8 @@ namespace ScreenLine
                     var offset = new Point();
                     var blend = new Blend { Alpha = (byte)(255 * Math.Max(0, 1 - Math.Max(0, now - 0.65) / 0.16)), Format = 1 };
                     var position = new Point { X = left, Y = top }; var size = new LayerSize { Width = width, Height = height };
-                    bool updatedLayer = shown ? UpdateLayeredWindow(window, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, dc, ref offset, 0, ref blend, 2)
-                        : InitializeLayer(window, IntPtr.Zero, ref position, ref size, dc, ref offset, 0, ref blend, 2);
+                    // 每帧连同完整尺寸提交，确保桌面合成器刷新图像内容。
+                    bool updatedLayer = UpdateLayeredWindow(window, IntPtr.Zero, ref position, ref size, dc, ref offset, 0, ref blend, 2);
                     if (!updatedLayer)
                     { if (stopped) break; throw new System.ComponentModel.Win32Exception(); }
                     if (!shown) { ShowWindow(window, 4); WindowsNative.SetWindowPos(window, new IntPtr(-1), left, top, width, height, 0x50); shown = true; }
@@ -268,6 +268,7 @@ namespace ScreenLine
                 (int)Math.Round((w + 2 * padX / sx) * dpi), (int)Math.Round((h + 2 * padY / sy) * dpi));
             if (!AlphaBlend(dc, destination.X, destination.Y, destination.Width, destination.Height, rotatedDc,
                 64 - padX, 64 - padY, spriteWidth + 2 * padX, spriteHeight + 2 * padY, blend)) throw new System.ComponentModel.Win32Exception();
+            GdiFlush();
             dirty = Gdi.Rectangle.Intersect(destination, new Gdi.Rectangle(0, 0, width, height));
             double sampleX = w * 0.8 - w / 2, sampleY = h * 0.65 + 12;
             samplePoint = new System.Windows.Point(x + w / 2 + cosine * sampleX - sine * sampleY, y - 12 + sine * sampleX + cosine * sampleY);
@@ -292,7 +293,6 @@ namespace ScreenLine
             lock (gate)
             {
                 if (released) return null;
-                Draw(seconds());
                 var bitmap = BitmapSource.Create(width, height, 96 * dpi, 96 * dpi, PixelFormats.Pbgra32, null, pixels, width * height * 4, width * 4);
                 bitmap.Freeze(); return bitmap;
             }

@@ -25,6 +25,8 @@ namespace ScreenLine.Tests
         [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr window);
         [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr window, IntPtr dc);
         [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr destination, int x, int y, int width, int height, IntPtr source, int sourceX, int sourceY, uint operation);
+        [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+        [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
 
         [STAThread]
         static void Main(string[] args)
@@ -42,6 +44,15 @@ namespace ScreenLine.Tests
                 {
                     context = new Window { Width = 640, Height = 360, Title = "图绳", ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.CenterScreen };
                     context.Show(); WindowsNative.ActivateEditor(new WindowInteropHelper(context).Handle);
+                    if (args.Contains("--capture-flow") || args.Contains("--clipboard-flow"))
+                    {
+                        context.WindowState = WindowState.Maximized;
+                        context.Content = new Border { Background = Brushes.Bisque,
+                            Child = new TextBlock { Text = "图绳 · 截图动画验证", FontSize = 64, Foreground = Brushes.DarkSlateGray,
+                                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center } };
+                        await CheckCaptureFlow(args.Contains("--clipboard-flow"));
+                        Console.WriteLine("真实截图上绳流程：" + checks + " 项通过"); return;
+                    }
                     var results = new List<object>();
                     foreach (int count in fullscreen || stress ? new[] { 49 } : snapshots ? new[] { 6 } : new[] { 6, 49 })
                     {
@@ -327,10 +338,111 @@ namespace ScreenLine.Tests
             foreach (var entry in added) gallery.Remove(entry);
         }
 
+        static async Task CheckCaptureFlow(bool clipboard)
+        {
+            string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "test-data", "capture-flow-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            var store = new StateStore(Path.Combine(root, "profile"));
+            store.State.CollectClipboard = true; store.State.CollectTextClipboard = false;
+            var controller = new DesktopController(store, Path.Combine(root, "watched"), false);
+            var previous = System.Windows.Forms.Clipboard.GetDataObject();
+            var savedClipboard = new System.Windows.Forms.DataObject();
+            if (previous != null) foreach (string format in previous.GetFormats(false))
+            {
+                object value = previous.GetData(format, false);
+                var stream = value as MemoryStream; if (stream != null) value = new MemoryStream(stream.ToArray());
+                var image = value as System.Drawing.Image; if (image != null) value = new System.Drawing.Bitmap(image);
+                if (value != null) savedClipboard.SetData(format, false, value);
+            }
+            uint sequence = 0;
+            try
+            {
+                await controller.Start();
+                for (int i = 0; i < 49; i++)
+                {
+                    string path = Picture(root, "existing-" + i, 320, 180);
+                    controller.Gallery.Add(path, ImageContent.Read(path, false));
+                }
+                controller.Shelf.Reveal(false, false, 0); await Task.Delay(500);
+                var screen = controller.Shelf.Display.Bounds;
+                foreach (bool full in new[] { false, true })
+                {
+                    var images = new List<System.Drawing.Bitmap>();
+                    try
+                    {
+                        int before = controller.Gallery.Items.Count;
+                        SetCursorPos(screen.Right - 140, screen.Bottom - 160);
+                        if (clipboard)
+                        {
+                            var data = new System.Windows.Forms.DataObject();
+                            string path = Picture(root, "clipboard-" + full, full ? screen.Width : 900, full ? screen.Height : 600);
+                            using (var picture = new System.Drawing.Bitmap(path))
+                            {
+                                data.SetImage(picture); await WindowsClipboard.Write(data); sequence = WindowsNative.GetClipboardSequenceNumber();
+                            }
+                        }
+                        else
+                        {
+                            controller.ShowCapture();
+                            for (int i = 0; i < 100 && controller.Capture == null; i++) await Task.Delay(20);
+                            var capture = controller.Capture;
+                            Check(capture != null && capture.IsVisible, "打开真实截图窗口");
+                            capture.Select(full ? new Rect(0, 0, screen.Width, screen.Height) : new Rect(180, 240, 900, 600));
+                            await Task.Delay(120);
+                            var button = capture.Tools["完成"];
+                            var point = button.PointToScreen(new Point(button.ActualWidth / 2, button.ActualHeight / 2));
+                            SetCursorPos((int)point.X, (int)point.Y);
+                            mouse_event(2, 0, 0, 0, UIntPtr.Zero); mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+                        }
+                        ShotFlight flight = null;
+                        for (int i = 0; i < 120 && flight == null; i++)
+                        { flight = controller.Shelf.MotionWindows.FirstOrDefault(); if (flight == null) await Task.Delay(20); }
+                        Check(flight != null, (clipboard ? "剪贴板截图" : "主动截图") + (full ? "全屏" : "区域") + "完成后实际启动上绳动画");
+                        sequence = WindowsNative.GetClipboardSequenceNumber();
+                        for (int i = 0; i < 8; i++)
+                        {
+                            var frame = new System.Drawing.Bitmap(screen.Width, screen.Height, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+                            using (var graphics = System.Drawing.Graphics.FromImage(frame)) CopyScreen(graphics, screen.Left, screen.Top, screen.Width, screen.Height);
+                            images.Add(frame); await Task.Delay(90);
+                        }
+                        string prefix = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, (clipboard ? "clipboard" : "capture") + (full ? "-full-" : "-region-"));
+                        for (int i = 0; i < images.Count; i++) images[i].Save(prefix + i + ".png");
+                        if (clipboard)
+                        {
+                            int early = BlueArea(images[1]), middle = BlueArea(images[3]);
+                            Check(early > 1000 && middle < early * 0.6, "屏幕中的图片随飞行缩小，不能只更新缓冲区或停在首帧：" + early + "→" + middle);
+                        }
+                        Check(flight.CaptureRenderer != null && flight.CaptureRenderer.Failure == null, "真实截图使用优化绘制路径");
+                        Check(flight.CaptureRenderer.Intervals.Length >= 20, "真实截图具有连续的飞行帧");
+                        Check(controller.Gallery.Items.Count == Math.Min(50, before + 1), "一次截图只新增一张挂图，并遵守挂图上限");
+                        await Task.Delay(300); await NativeReleased();
+                        Check(!controller.Shelf.MotionWindows.Any() && !controller.Shelf.CardFor(controller.Gallery.Items.Last().Path).Flying, "截图完整飞行并落位");
+                        controller.Shelf.Reveal(false, false, 0); await Task.Delay(400);
+                    }
+                    finally { foreach (var image in images) image.Dispose(); }
+                }
+            }
+            finally
+            {
+                controller.Dispose();
+                if (sequence != 0 && WindowsNative.GetClipboardSequenceNumber() == sequence) System.Windows.Forms.Clipboard.SetDataObject(savedClipboard, true);
+            }
+        }
+
         static async Task NativeReleased()
         {
             for (int i = 0; i < 100 && CaptureFlightRenderer.ActiveCount != 0; i++) await Task.Delay(20);
             Check(CaptureFlightRenderer.ActiveCount == 0, "原生截图绘制资源已释放");
+        }
+        static int BlueArea(System.Drawing.Bitmap image)
+        {
+            int count = 0;
+            for (int y = 260; y < image.Height - 80; y += 4) for (int x = 40; x < image.Width - 40; x += 4)
+            {
+                var color = image.GetPixel(x, y);
+                if (Math.Abs(color.R - 70) < 15 && Math.Abs(color.G - 130) < 15 && Math.Abs(color.B - 180) < 15) count++;
+            }
+            return count;
         }
         static void Check(bool condition, string message) { if (!condition) throw new Exception(message); checks++; }
     }

@@ -210,10 +210,11 @@ namespace ScreenLine
                 if (Appearance != null) Appearance.Close(); if (ShortcutSettings != null) ShortcutSettings.Close();
                 Shelf.Reveal(false, false, 0); await Task.Delay(260);
                 if (disposed) return;
-                Capture = new CaptureWindow(display);
-                var result = await Capture.PickAsync(); Capture = null;
+                var capture = new CaptureWindow(display); Capture = capture;
+                var result = await capture.PickAsync(); Capture = null;
                 if (disposed) return;
-                if (result != null) await Captures.AcceptCapture(result);
+                if (result != null) await Captures.AcceptCapture(result,
+                    new Point(display.Bounds.Left + capture.Selection.Right, display.Bounds.Top + capture.Selection.Bottom));
                 else if (revealed) Shelf.Reveal(true, false, 2);
             }
             catch (Exception error) { if (!disposed) { Gallery.Store.Log(error); Notice("截图未完成，请重试。"); } }

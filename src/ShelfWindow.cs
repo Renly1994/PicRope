@@ -784,6 +784,7 @@ namespace ScreenLine
                 return;
             }
             if ((Revealed || nearTop || avoidingCaption) && !busy && !viewing && !ChoosingAppearance && !ChoosingBasket && !ChoosingTexts
+                && !flights.Any(flight => !flight.Falling && !flight.Collecting)
                 && WindowsNative.OverCaptionButtons(screen, cursor, Handle))
             {
                 edgeSince = DateTime.MaxValue; previousDown = down;
