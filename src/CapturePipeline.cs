@@ -262,11 +262,11 @@ namespace ScreenLine
                 if (picture == null || disposed || !CollectClipboard || WindowsNative.GetClipboardSequenceNumber() != sequence) return;
                 ImageContent content = await Task.Run(() => ImageContent.Decode(picture.Bytes));
                 if (disposed || !CollectClipboard || WindowsNative.GetClipboardSequenceNumber() != sequence) return;
-                if (!receipts.Accept(content.Fingerprint, CaptureSource.Clipboard, DateTime.UtcNow)) return;
                 Directory.CreateDirectory(gallery.Store.Inbox);
                 string path = Path.Combine(gallery.Store.Inbox, "截图_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + "_" + Guid.NewGuid().ToString("N").Substring(0, 8) + picture.Extension);
-                await Task.Run(() => File.WriteAllBytes(path, picture.Bytes));
-                if (disposed || !CollectClipboard || WindowsNative.GetClipboardSequenceNumber() != sequence) { File.Delete(path); return; }
+                if (!await PersistClipboard(path, () => Task.Run(() => File.WriteAllBytes(path, picture.Bytes)),
+                    () => !disposed && CollectClipboard && WindowsNative.GetClipboardSequenceNumber() == sequence,
+                    receipts, content.Fingerprint)) return;
                 if (!AutoHang) gallery.Collect(path, content);
                 else
                 {
@@ -280,6 +280,19 @@ namespace ScreenLine
                 if (Failed != null) Failed("这张图片暂时无法读取，请重试。");
             }
             finally { clipboardBusy = false; }
+        }
+
+        internal static async Task<bool> PersistClipboard(string path, Func<Task> write, Func<bool> isCurrent, CaptureReceipts receipts, string fingerprint)
+        {
+            bool accepted = false;
+            try
+            {
+                await write();
+                // A discarded or failed write must not suppress a later folder capture.
+                accepted = isCurrent() && receipts.Accept(fingerprint, CaptureSource.Clipboard, DateTime.UtcNow);
+                return accepted;
+            }
+            finally { if (!accepted) File.Delete(path); }
         }
 
         internal static Task<ClipboardPicture> ReadClipboardImage(uint sequence)
