@@ -21,7 +21,7 @@ using Forms = System.Windows.Forms;
 [assembly: AssemblyDescription("图绳：把截图挂在屏幕上沿，随手复制、拖拽和保存。")]
 [assembly: AssemblyVersion("1.2.3.0")]
 [assembly: AssemblyFileVersion("1.2.3.0")]
-[assembly: AssemblyInformationalVersion("1.2.3")]
+[assembly: AssemblyInformationalVersion("1.2.3+topmask")]
 
 namespace ScreenLine
 {
@@ -111,6 +111,12 @@ namespace ScreenLine
             });
             topHoverToggle.IsCheckable = true;
             topHoverToggle.IsChecked = store.State.RevealOnTopHover;
+            more.AddAction("框选顶部屏蔽区…", "show", delegate { ShowTopMask(); });
+            more.AddAction("清除顶部屏蔽区", "clear", delegate
+            {
+                try { Shelf.SetTopMask(false, 0, 0); Notice("已清除顶部屏蔽区"); }
+                catch (Exception error) { store.Log(error); Notice("屏蔽区设置保存失败"); }
+            });
             MenuItem previewToggle = null;
             previewToggle = more.AddAction("悬停预览", "picture", delegate
             {
@@ -358,6 +364,26 @@ namespace ScreenLine
             var current = notice;
             current.Closed += delegate { if (notice == current) notice = null; };
             notice.Show();
+        }
+
+        TopMaskWindow maskWindow;
+
+        /// <summary>弹出顶部带子，让用户拖拽框选一段「不唤起图绳」的死区。</summary>
+        void ShowTopMask()
+        {
+            if (maskWindow != null) { maskWindow.Activate(); return; }
+            Shelf.ChoosingMask = true;
+            maskWindow = new TopMaskWindow(Shelf.Display, delegate(double left, double right)
+            {
+                try
+                {
+                    Shelf.SetTopMask(true, left, right);
+                    Notice("已屏蔽顶部 " + Math.Round(left) + "–" + Math.Round(right) + " px");
+                }
+                catch (Exception error) { Gallery.Store.Log(error); Notice("屏蔽区保存失败"); }
+            });
+            maskWindow.Closed += delegate { maskWindow = null; Shelf.ChoosingMask = false; };
+            maskWindow.Show();
         }
 
         static string Quote(string path) { return "\"" + path + "\""; }

@@ -85,6 +85,7 @@ namespace ScreenLine
         internal bool ChoosingAppearance { get; set; }
         internal bool ChoosingBasket { get; set; }
         internal bool ChoosingTexts { get; set; }
+        internal bool ChoosingMask { get; set; }
         internal bool Capturing { get; set; }
         double AccessoryWidth { get { return (gallery.Store.State.CollectClipboard ? 156 : 0) + (gallery.Store.State.CollectTextClipboard ? 104 : 0); } }
         double PhotoWidth { get { return Math.Max(1, (ActualWidth > 0 ? ActualWidth : Width) - 48 - AccessoryWidth); } }
@@ -319,6 +320,31 @@ namespace ScreenLine
             edgeSince = DateTime.MaxValue;
             // 跨屏收起也是顶部悬停发起的，关闭时取消尚未完成的自动展开。
             if (!enabled) CancelDisplaySwitch();
+        }
+
+        /// <summary>光标 X（物理像素）是否落在顶部屏蔽区里。</summary>
+        internal bool TopMasked(double x)
+        {
+            var state = gallery.Store.State;
+            return state.TopMaskEnabled && state.TopMaskRight - state.TopMaskLeft >= 1
+                && x >= state.TopMaskLeft && x < state.TopMaskRight;
+        }
+
+        internal void SetTopMask(bool enabled, double left, double right)
+        {
+            var state = gallery.Store.State;
+            bool previousOn = state.TopMaskEnabled;
+            double previousLeft = state.TopMaskLeft, previousRight = state.TopMaskRight;
+            state.TopMaskEnabled = enabled && right - left >= 1;
+            state.TopMaskLeft = Math.Min(left, right);
+            state.TopMaskRight = Math.Max(left, right);
+            try { gallery.Store.Save(); }
+            catch
+            {
+                state.TopMaskEnabled = previousOn; state.TopMaskLeft = previousLeft; state.TopMaskRight = previousRight;
+                throw;
+            }
+            edgeSince = DateTime.MaxValue;
         }
 
         public void Update()
@@ -740,7 +766,8 @@ namespace ScreenLine
             var screen = SelectedDisplay();
             bool down = (WindowsNative.GetAsyncKeyState(1) & 0x8000) != 0;
             bool nearTop = cursor.X >= screen.Bounds.Left && cursor.X < screen.Bounds.Right
-                && cursor.Y >= screen.Bounds.Top && cursor.Y <= Math.Max(screen.Bounds.Top + 2, screen.WorkingArea.Top - 1);
+                && cursor.Y >= screen.Bounds.Top && cursor.Y <= Math.Max(screen.Bounds.Top + 2, screen.WorkingArea.Top - 1)
+                && !(ChoosingMask || TopMasked(cursor.X));
             var interval = TimeSpan.FromMilliseconds(Revealed || nearTop ? 30 : 100);
             if (pointer.Interval != interval) pointer.Interval = interval;
             bool over = Revealed && OverControl(cursor);

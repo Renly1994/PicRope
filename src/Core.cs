@@ -20,6 +20,11 @@ namespace ScreenLine
         public bool AutoHang { get; set; }
         public bool HoverPreview { get; set; }
         public bool RevealOnTopHover { get; set; }
+        // 顶部屏蔽区：屏幕顶部这条触发线上留出一段「死区」，鼠标移到这里不唤起图绳。
+        // 坐标是物理像素，相对虚拟桌面（与 WindowsNative.Cursor() 一致）。
+        public bool TopMaskEnabled { get; set; }
+        public double TopMaskLeft { get; set; }
+        public double TopMaskRight { get; set; }
         public string Theme { get; set; }
         public string DisplayDevice { get; set; }
         public string LastUpdateNotification { get; set; }
