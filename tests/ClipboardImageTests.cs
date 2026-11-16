@@ -56,12 +56,14 @@ namespace ScreenLine.Tests
             Check(!ClipboardRules.IsImage(mixedFiles, "explorer"), "图片格式扩展后仍不自动收集资源管理器文件");
             var mixedText = new DataObject(); mixedText.SetData("image/jpeg", new byte[] { 1 }); mixedText.SetData(DataFormats.UnicodeText, "正文");
             Check(!ClipboardRules.IsImage(mixedText), "图片格式扩展后仍不误收图文");
-            var choices = new DataObject(); choices.SetData("PNG", new byte[] { 1, 2 }); choices.SetData("image/jpeg", new byte[] { 3, 4 });
+            byte[] png = ImageContent.EncodeClipboard(BitmapSource.Create(2, 2, 96, 96, PixelFormats.Bgra32, null, new byte[16], 8));
+            byte[] jpeg = EncodedFixture("image/jpeg").Item2;
+            var choices = new DataObject(); choices.SetData("PNG", png); choices.SetData("image/jpeg", jpeg);
             var preferred = CapturePipeline.ReadImage(new GuardedDataObject(choices, "image/jpeg"), "OtherApp").GetAwaiter().GetResult();
-            Check(preferred != null && preferred.Extension == ".png" && preferred.Bytes.SequenceEqual(new byte[] { 1, 2 }), "多格式图片优先无损 PNG，不读取其他格式");
-            var brokenFirst = new DataObject(); brokenFirst.SetData("PNG", "not-bytes"); brokenFirst.SetData("image/jpeg", new byte[] { 3, 4 });
+            Check(preferred != null && preferred.Extension == ".png" && preferred.Bytes.SequenceEqual(png), "多格式图片优先无损 PNG，不读取其他格式");
+            var brokenFirst = new DataObject(); brokenFirst.SetData("PNG", "not-bytes"); brokenFirst.SetData("image/jpeg", jpeg);
             var fallback = CapturePipeline.ReadImage(brokenFirst, "OtherApp").GetAwaiter().GetResult();
-            Check(fallback != null && fallback.Extension == ".jpg" && fallback.Bytes.SequenceEqual(new byte[] { 3, 4 }), "不可读取的格式不阻止其他编码图片");
+            Check(fallback != null && fallback.Extension == ".jpg" && fallback.Bytes.SequenceEqual(jpeg), "不可读取的格式不阻止其他编码图片");
             Check(Html("<img src=\"https://example.com/a.png\">", null), "网页单张图片可收集");
             Check(Html("<a href=\"https://example.com/\"><img src=\"https://example.com/a.png\"></a>", "https://example.com/a.png"), "带图片地址的复制可收集");
             Check(Html("Version:1.0\r\n<html><body><!--StartFragment--><img src='a.png'><!--EndFragment--><p>未选中的正文</p></body></html>", null), "只检查 HTML 剪贴板选中片段");
@@ -94,7 +96,7 @@ namespace ScreenLine.Tests
             string fixture = Path.Combine(Path.GetTempPath(), "picrope-clipboard-" + Guid.NewGuid().ToString("N") + ".png");
             try
             {
-                byte[] contents = { 1, 2, 3, 4 }; File.WriteAllBytes(fixture, contents);
+                byte[] contents = png; File.WriteAllBytes(fixture, contents);
                 var delayed = new DataObject(); delayed.SetData(DataFormats.FileDrop, new[] { fixture });
                 delayed.SetData("DeviceIndependentBitmap", new byte[] { 1 }); delayed.SetData("image/png", new byte[] { 1 });
                 var picture = CapturePipeline.ReadImage(new GuardedDataObject(delayed, "PNG", "image/png"), "Weixin").GetAwaiter().GetResult();
@@ -110,8 +112,9 @@ namespace ScreenLine.Tests
             var bytes = new DataObject(); bytes.SetData("image/png", new byte[] { 1, 2, 3 });
             string extension;
             Check(WindowsClipboard.ReadEncodedImage(bytes, out extension).SequenceEqual(new byte[] { 1, 2, 3 }) && extension == ".png", "读取 PNG 字节格式");
+            bytes.SetData("image/png", png);
             var plain = CapturePipeline.ReadImage(bytes, "OtherApp").GetAwaiter().GetResult();
-            Check(plain != null && plain.Bytes.SequenceEqual(new byte[] { 1, 2, 3 }), "其他软件的 PNG 图片可读取");
+            Check(plain != null && plain.Bytes.SequenceEqual(png), "其他软件的 PNG 图片可读取");
             var streamData = new DataObject(); var stream = new MemoryStream(new byte[] { 4, 5, 6 }); stream.Position = 2; streamData.SetData("PNG", stream);
             Check(WindowsClipboard.ReadEncodedImage(streamData, out extension).SequenceEqual(new byte[] { 4, 5, 6 }), "从头读取 PNG 流");
             var bitmapData = new DataObject();
@@ -119,6 +122,49 @@ namespace ScreenLine.Tests
             bitmap.Freeze(); bitmapData.SetImage(bitmap);
             var converted = CapturePipeline.ReadImage(bitmapData, "OtherApp").GetAwaiter().GetResult();
             Check(converted != null && ImageContent.Decode(converted.Bytes).PixelWidth == 2, "其他软件只有位图时仍能正确收集");
+            var corrupt = new DataObject(); corrupt.SetData("PNG", new byte[] { 1, 2, 3 }); corrupt.SetImage(bitmap);
+            Check(CapturePipeline.ReadImage(corrupt, "QQ").GetAwaiter().GetResult().Content.PixelWidth == 2,
+                "损坏 PNG 不阻断有效 Bitmap 兜底");
+            var badFileFormat = new DataObject(); badFileFormat.SetData("PNG", new FailingImageStream(new FileFormatException("Malformed image fixture"))); badFileFormat.SetImage(bitmap);
+            Check(CapturePipeline.ReadImage(badFileFormat, "QQ").GetAwaiter().GetResult().Content.PixelWidth == 2,
+                "明确 FileFormatException 不阻断 Bitmap 兜底");
+            var badFormat = new DataObject(); badFormat.SetData("PNG", new FailingImageStream(new FormatException("Malformed representation fixture"))); badFormat.SetData("image/jpeg", jpeg);
+            Check(CapturePipeline.ReadImage(badFormat, "QQ").GetAwaiter().GetResult().Bytes.SequenceEqual(jpeg),
+                "明确 FormatException 可回退其他编码格式");
+            corrupt.SetData("image/jpeg", jpeg);
+            Check(CapturePipeline.ReadImage(corrupt, "QQ").GetAwaiter().GetResult().Bytes.SequenceEqual(jpeg),
+                "损坏 PNG 可回退其他编码格式");
+            byte[] bmp = EncodedFixture("image/bmp").Item2;
+            var dib = new DataObject(); dib.SetData(DataFormats.Dib, bmp.Skip(14).ToArray(), false);
+            Check(CapturePipeline.ReadImage(dib, "QQ").GetAwaiter().GetResult().Content.PixelWidth == 2,
+                "只有原生 DIB 时可读取，不依赖自动转换");
+            foreach (byte alpha in new byte[] { 0, 128, 255 })
+            {
+                byte[] native = new byte[124 + 16];
+                Buffer.BlockCopy(BitConverter.GetBytes(124), 0, native, 0, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(2), 0, native, 4, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(-2), 0, native, 8, 4);
+                native[12] = 1; native[14] = 32; native[16] = 3;
+                Buffer.BlockCopy(BitConverter.GetBytes(0x00ff0000), 0, native, 40, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(0x0000ff00), 0, native, 44, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(0x000000ff), 0, native, 48, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(unchecked((int)0xff000000)), 0, native, 52, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(0x73524742), 0, native, 56, 4); // LCS_sRGB
+                byte[] pixels = new byte[16];
+                for (int i = 0; i < 16; i += 4) { pixels[i + 2] = 255; pixels[i + 3] = alpha; }
+                Buffer.BlockCopy(pixels, 0, native, 124, pixels.Length);
+                var nativeData = new DataObject(); nativeData.SetData("Format17", native, false);
+                var nativePicture = CapturePipeline.ReadImage(nativeData, "QQ").GetAwaiter().GetResult();
+                var equivalent = BitmapSource.Create(2, 2, 96, 96, PixelFormats.Bgra32, null, pixels, 8);
+                Check(nativePicture.Content.Fingerprint == ImageContent.Decode(ImageContent.EncodeClipboard(equivalent)).Fingerprint,
+                    "DIBV5 alpha=" + alpha + " 与 Bitmap 路径保持一致");
+            }
+            var qq = new DataObject(); qq.SetData(DataFormats.FileDrop, new[] { "C:\\missing-qq-screenshot.png" }); qq.SetData("PNG", png);
+            Check(ClipboardRules.IsImage(qq, "QQ") && ClipboardRules.IsImage(qq, "TIM"), "QQ/TIM 图片加文件表示可识别");
+            Check(CapturePipeline.ReadImage(qq, "QQ").GetAwaiter().GetResult().Bytes.SequenceEqual(png), "缓存文件消失后回退剪贴板图片");
+            Check(!ClipboardRules.IsImage(qq, "explorer") && !ClipboardRules.IsImage(qq, null), "仍拒绝文件复制和未知文件来源");
+            qq.SetData(DataFormats.UnicodeText, "正文");
+            Check(!ClipboardRules.IsImage(qq, "QQ"), "QQ 图文混合仍拒绝");
             Check(WindowsClipboard.ReadEncodedImage(new DataObject(), out extension) == null, "没有编码图片时可回退到位图");
             var large = new DataObject(); large.SetData("PNG", new OversizedStream());
             bool rejected = false; try { WindowsClipboard.ReadEncodedImage(large, out extension); } catch (InvalidDataException) { rejected = true; }
@@ -145,6 +191,13 @@ namespace ScreenLine.Tests
             return ClipboardRules.IsImage(data);
         }
         static void Check(bool value, string description) { if (!value) throw new Exception(description); checks++; }
+
+        sealed class FailingImageStream : MemoryStream
+        {
+            readonly Exception failure;
+            public FailingImageStream(Exception failure) : base(new byte[] { 1, 2, 3 }) { this.failure = failure; }
+            public override int Read(byte[] buffer, int offset, int count) { throw failure; }
+        }
 
         sealed class OversizedStream : Stream
         {

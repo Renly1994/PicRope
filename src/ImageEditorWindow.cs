@@ -161,39 +161,51 @@ namespace ScreenLine
                 if (busy || (action != "save" && action != "saveAs" && action != "copy")) return;
                 closeAfterSave = action == "save" && request.ContainsKey("closeAfterSave") && (bool)request["closeAfterSave"];
                 busy = true;
-                byte[] png = await Task.Run(() => ImageEditFiles.Decode(request["data"] as string));
-                if (closed) return;
-                if (action == "copy")
+                // The browser compares the actual design state after committing pending
+                // tools/text. A clean save must not encode JPEG again or touch the file.
+                if (action == "save" && request.ContainsKey("unchanged") && (bool)request["unchanged"])
                 {
-                    var payload = new DataObject();
-                    using (var stream = new MemoryStream(png))
-                        payload.SetImage(BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0]);
-                    payload.SetData("PNG", new MemoryStream(png));
-                    payload.SetData(ClipboardRules.OwnFormat, "1");
-                    await WindowsClipboard.Write(payload);
-                    copied();
-                    success = true;
-                    message = "已复制图片";
+                    if (!File.Exists(ImagePath)) throw new FileNotFoundException("原图已不存在。", ImagePath);
+                    success = didSave = true;
+                    dirty = false;
+                    message = "没有需要保存的修改";
                 }
                 else
                 {
-                    string destination = ImagePath;
-                    if (action == "saveAs")
+                    byte[] png = await Task.Run(() => ImageEditFiles.Decode(request["data"] as string));
+                    if (closed) return;
+                    if (action == "copy")
                     {
-                        var picker = new SaveFileDialog { Title = "另存图片", InitialDirectory = Path.GetDirectoryName(ImagePath), FileName = Path.GetFileNameWithoutExtension(ImagePath) + "_编辑.png", Filter = "PNG 图片|*.png|JPEG 图片|*.jpg|BMP 图片|*.bmp|TIFF 图片|*.tiff", DefaultExt = ".png", AddExtension = true, OverwritePrompt = true };
-                        destination = picker.ShowDialog(this) == true ? picker.FileName : null;
+                        var payload = new DataObject();
+                        using (var stream = new MemoryStream(png))
+                            payload.SetImage(BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0]);
+                        payload.SetData("PNG", new MemoryStream(png));
+                        payload.SetData(ClipboardRules.OwnFormat, "1");
+                        await WindowsClipboard.Write(payload);
+                        copied();
+                        success = true;
+                        message = "已复制图片";
                     }
-                    if (destination != null)
+                    else
                     {
-                        await Task.Run(() => ImageEditFiles.Save(destination, png));
-                        await saved(destination);
-                        ImagePath = destination;
-                        Title = "图片编辑 · " + Path.GetFileName(ImagePath);
-                        success = didSave = true;
-                        dirty = false;
-                        message = "已保存";
+                        string destination = ImagePath;
+                        if (action == "saveAs")
+                        {
+                            var picker = new SaveFileDialog { Title = "另存图片", InitialDirectory = Path.GetDirectoryName(ImagePath), FileName = Path.GetFileNameWithoutExtension(ImagePath) + "_编辑.png", Filter = "PNG 图片|*.png|JPEG 图片|*.jpg|BMP 图片|*.bmp|TIFF 图片|*.tiff", DefaultExt = ".png", AddExtension = true, OverwritePrompt = true };
+                            destination = picker.ShowDialog(this) == true ? picker.FileName : null;
+                        }
+                        if (destination != null)
+                        {
+                            await Task.Run(() => ImageEditFiles.Save(destination, png));
+                            await saved(destination);
+                            ImagePath = destination;
+                            Title = "图片编辑 · " + Path.GetFileName(ImagePath);
+                            success = didSave = true;
+                            dirty = false;
+                            message = "已保存";
+                        }
+                        else { success = true; message = "已取消另存为"; }
                     }
-                    else { success = true; message = "已取消另存为"; }
                 }
             }
             catch (Exception error)

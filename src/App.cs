@@ -67,10 +67,10 @@ namespace ScreenLine
             Shelf.BasketRequested += ShowBasket;
             Shelf.TextRequested += ShowTexts;
             Texts.Changed += Shelf.UpdateTexts;
-            events = new WindowsEvents();
+            events = new WindowsEvents(store.State.ToggleModifiers, store.State.ToggleKey);
             events.RegisterCapture(store.State.CaptureModifiers, store.State.CaptureKey);
-            events.CaptureRequested += ShowCapture;
-            events.ToggleRequested += Shelf.Toggle;
+            events.CaptureRequested += delegate { if (ShortcutSettings == null) ShowCapture(); };
+            events.ToggleRequested += delegate { if (ShortcutSettings == null) Shelf.Toggle(); };
             events.ExitRequested += Exit;
             events.ClipboardChanged += Captures.ClipboardChanged;
             textClipboardSequence = WindowsNative.GetClipboardSequenceNumber();
@@ -85,8 +85,8 @@ namespace ScreenLine
             TrayMenu.Opened += delegate { SyncScreens(); };
             TrayMenu.ScreenMenu.Opened += delegate { SyncScreens(); };
             TrayMenu.OnAction(TrayMenu.VisibilityButton, delegate { Shelf.Toggle(); });
-            if (events.ShortcutAvailable) TrayMenu.Shortcut.Text = "Ctrl+Alt+T";
-            else Notice("Ctrl+Alt+T 已被占用，可点击托盘图标打开。");
+            UpdateToggleLabel();
+            if (!events.ShortcutAvailable) Notice("显示/隐藏快捷键不可用，可点击托盘图标打开并在更多菜单中修改。");
             TrayMenu.OnAction(TrayMenu.BasketButton, ShowBasket);
             TrayMenu.OnAction(TrayMenu.TextButton, ShowTexts);
             autoHang = TrayMenu.AutoHang;
@@ -123,12 +123,8 @@ namespace ScreenLine
             previewToggle.IsChecked = store.State.HoverPreview;
             captureMenu = more.AddAction("区域截图", "capture", ShowCapture);
             UpdateCaptureLabel();
-            more.AddAction("截图快捷键…", "shortcut", delegate
-            {
-                if (ShortcutSettings != null) { ShortcutSettings.Activate(); return; }
-                ShortcutSettings = new ShortcutWindow(store.State.CaptureModifiers, store.State.CaptureKey, SetCaptureShortcut);
-                ShortcutSettings.Closed += delegate { ShortcutSettings = null; }; ShortcutSettings.Show();
-            });
+            more.AddAction("截图快捷键…", "shortcut", delegate { ShowShortcutSettings(false); });
+            more.AddAction("显示/隐藏快捷键…", "shortcut", delegate { ShowShortcutSettings(true); });
             more.Separator();
             more.AddAction("添加图片…", "add", async delegate
             {
@@ -184,18 +180,61 @@ namespace ScreenLine
             captureMenu.InputGestureText = events.CaptureShortcutAvailable ? ShortcutWindow.Label(Gallery.Store.State.CaptureModifiers, Gallery.Store.State.CaptureKey) : "快捷键被占用";
         }
 
-        internal bool SetCaptureShortcut(uint modifiers, uint key)
+        void UpdateToggleLabel()
         {
-            if (!events.RegisterCapture(modifiers, key)) return false;
-            uint previousModifiers = Gallery.Store.State.CaptureModifiers, previousKey = Gallery.Store.State.CaptureKey;
-            Gallery.Store.State.CaptureModifiers = modifiers; Gallery.Store.State.CaptureKey = key;
-            try { Gallery.Store.Save(); }
+            TrayMenu.Shortcut.Text = events.ShortcutAvailable ? ShortcutWindow.Label(Gallery.Store.State.ToggleModifiers, Gallery.Store.State.ToggleKey) : "快捷键不可用";
+        }
+
+        void ShowShortcutSettings(bool toggle)
+        {
+            if (ShortcutSettings != null) { ShortcutSettings.Activate(); return; }
+            var state = Gallery.Store.State;
+            ShortcutSettings = new ShortcutWindow(toggle ? "显示/隐藏快捷键" : "截图快捷键",
+                toggle ? state.ToggleModifiers : state.CaptureModifiers, toggle ? state.ToggleKey : state.CaptureKey,
+                3, (uint)(toggle ? 'T' : 'S'), delegate(uint modifiers, uint key)
+                {
+                    return SetShortcut(toggle, modifiers, key) ? null : shortcutError;
+                });
+            ShortcutSettings.Closed += delegate { ShortcutSettings = null; }; ShortcutSettings.Show();
+        }
+
+        string shortcutError;
+        internal bool SetCaptureShortcut(uint modifiers, uint key) { return SetShortcut(false, modifiers, key); }
+        internal bool SetToggleShortcut(uint modifiers, uint key) { return SetShortcut(true, modifiers, key); }
+
+        bool SetShortcut(bool toggle, uint modifiers, uint key)
+        {
+            shortcutError = "组合键已被占用或系统不支持，请换一组。";
+            if (!ShortcutRules.IsValid(modifiers, key)) { shortcutError = "请使用 Ctrl、Alt、Shift 或 Win 搭配有效按键。"; return false; }
+            var state = Gallery.Store.State;
+            if (modifiers == (toggle ? state.CaptureModifiers : state.ToggleModifiers) && key == (toggle ? state.CaptureKey : state.ToggleKey))
+            { shortcutError = "截图和显示/隐藏不能使用同一组合键。"; return false; }
+            uint previousModifiers = toggle ? state.ToggleModifiers : state.CaptureModifiers;
+            uint previousKey = toggle ? state.ToggleKey : state.CaptureKey;
+            Action persist = delegate
+            {
+                if (toggle) { state.ToggleModifiers = modifiers; state.ToggleKey = key; }
+                else { state.CaptureModifiers = modifiers; state.CaptureKey = key; }
+                try { Gallery.Store.Save(); }
+                catch
+                {
+                    if (toggle) { state.ToggleModifiers = previousModifiers; state.ToggleKey = previousKey; }
+                    else { state.CaptureModifiers = previousModifiers; state.CaptureKey = previousKey; }
+                    throw;
+                }
+            };
+            try
+            {
+                bool saved = toggle ? events.RegisterToggle(modifiers, key, persist) : events.RegisterCapture(modifiers, key, persist);
+                if (!saved) return false;
+            }
             catch (Exception error)
             {
-                Gallery.Store.State.CaptureModifiers = previousModifiers; Gallery.Store.State.CaptureKey = previousKey;
-                events.RegisterCapture(previousModifiers, previousKey); Gallery.Store.Log(error); Notice("无法保存快捷键，请重试。"); return false;
+                shortcutError = "无法保存快捷键，原快捷键已保留，请重试。";
+                try { Gallery.Store.Log(error); } catch { }
+                return false;
             }
-            UpdateCaptureLabel(); return true;
+            UpdateCaptureLabel(); UpdateToggleLabel(); return true;
         }
 
         internal async void ShowCapture()

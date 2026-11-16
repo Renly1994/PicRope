@@ -294,12 +294,15 @@ window.startEditor=async function(options){
   editor.render();
   let current;
   for(let attempt=0;attempt<100;attempt++){
-    try{current=editor.getCurrentImgData();if(current.imageData.width>0&&current.imageData.height>0)break;}catch{}
+    // updateState is not wired until React mounts; never wait on it indefinitely.
+    current=await Promise.race([readState(),new Promise(resolve=>setTimeout(resolve,50))]);
+    if(current?.designLayer&&current.shownImageDimensions?.width>0&&current.originalImage?.width>0)break;
     await new Promise(resolve=>setTimeout(resolve,50));
   }
-  if(!current?.imageData?.width)throw new Error('编辑画布加载超时');
-  baseline=stateKey(current.designState);
-  canvasStage=(await readState()).designLayer.getStage();
+  if(!current?.designLayer||!current.shownImageDimensions?.width)throw new Error('编辑画布加载超时');
+  // Readiness must not encode an entire image (or reset the vendor's history).
+  baseline=currentKey=stateKey(current);
+  canvasStage=current.designLayer.getStage();
   ready=true;chooseTool('Rect');showStatus('');
   send({action:'ready'});
 };
@@ -313,6 +316,51 @@ window.imageBounds=function(){
   return [bounds.x+left,bounds.y+top,Math.max(...points.map(p=>p.x))-left,Math.max(...points.map(p=>p.y))-top];
 };
 
+// Filerobot caches its window-sized image before scaling the export back to the
+// source dimensions. Increase only that cache's density, never all stage canvases.
+function exportOriginalPixels(state){
+  const stage=state.designLayer.getStage();
+  const original=stage.findOne('#FIE_original-image');
+  const source=original?.image();
+  const ratio=Math.max(1,source?.naturalWidth/original?.width(),source?.naturalHeight/original?.height());
+  if(!Number.isFinite(ratio))throw new Error('无法确定原图像素尺寸');
+  // Konva may allocate scene, filter, hit and temporary RGBA buffers together.
+  // Budget only the additional full-resolution filter cache, before cloning the
+  // stage. Include rounding/padding rather than trusting source dimensions alone.
+  // 12 MP / 8192 px keeps each full-density RGBA buffer below roughly 48 MB.
+  if(original.filters()?.length){
+    const cacheWidth=Math.ceil((Math.ceil(original.width())+2)*ratio);
+    const cacheHeight=Math.ceil((Math.ceil(original.height())+2)*ratio);
+    if(cacheWidth>8192||cacheHeight>8192||cacheWidth*cacheHeight>12000000){
+      const error=new Error('原图过大，无法安全导出滤镜或调色效果（缓存上限 1200 万像素、单边 8192 像素）。请先移除滤镜和调色后保存；如需保留效果，请先缩小原图后重新打开。当前修改仍保留。');
+      error.code='FILTER_CACHE_LIMIT';
+      throw error;
+    }
+  }
+  const clone=stage.clone,ownClone=Object.prototype.hasOwnProperty.call(stage,'clone');
+  let exportStage;
+  stage.clone=function(options){
+    exportStage=clone.call(this,options);
+    const image=exportStage.findOne('#FIE_original-image');
+    if(!image)throw new Error('导出画布缺少原图');
+    const cache=image.cache;
+    image.cache=function(options){
+      // With no filters, draw the decoded source directly: even a native-density
+      // cache can introduce rounding at fractional window-fit sizes.
+      if(!this.filters()?.length){this.clearCache();return this;}
+      return cache.call(this,{...options,pixelRatio:ratio});
+    };
+    return exportStage;
+  };
+  try{return editor.getCurrentImgData({extension:'png'},1);}
+  finally{
+    if(ownClone)stage.clone=clone;else delete stage.clone;
+    // Also release the export clone when encoding throws before vendor cleanup.
+    exportStage?.destroy();
+    state.designLayer.setAttr('isSaving',false);
+  }
+}
+
 window.submit=async function(action){
   if(!ready||busy)return;
   const toolCompletion=finishTool(true);
@@ -321,10 +369,15 @@ window.submit=async function(action){
     await toolCompletion;
     await finishText();
     await document.fonts.ready;
-    const result=editor.getCurrentImgData({extension:'png'},1);
-    submitted=currentKey||stateKey(result.designState);
+    const state=await readState();
+    submitted=currentKey=stateKey(state);
+    if((action==='save'||action==='finish')&&submitted===baseline){
+      send({action:'save',unchanged:true,closeAfterSave:action==='finish'});
+      return;
+    }
+    const result=exportOriginalPixels(state);
     send({action:action==='finish'?'save':action,closeAfterSave:action==='finish',data:result.imageData.imageBase64});
-  }catch(error){window.completeAction({success:false,message:'无法导出图片，请重试。'});}
+  }catch(error){window.completeAction({success:false,message:error.code==='FILTER_CACHE_LIMIT'?error.message:'无法导出图片，请重试。'});}
 };
 
 window.completeAction=function(result){

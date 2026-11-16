@@ -240,7 +240,9 @@ namespace ScreenLine
             if (formats.Contains("FileDrop"))
             {
                 bool wechat = string.Equals(source, "Weixin", StringComparison.OrdinalIgnoreCase) || string.Equals(source, "WeChat", StringComparison.OrdinalIgnoreCase);
-                if (!wechat || !formats.Contains("image/png") || !formats.Contains("DeviceIndependentBitmap")
+                bool qq = string.Equals(source, "QQ", StringComparison.OrdinalIgnoreCase) || string.Equals(source, "TIM", StringComparison.OrdinalIgnoreCase);
+                bool screenshot = (wechat && formats.Contains("image/png") && formats.Contains("DeviceIndependentBitmap")) || (qq && HasImage(formats));
+                if (!screenshot
                     || formats.Contains("HTML Format") || formats.Contains("Rich Text Format") || formats.Contains("UnicodeText") || formats.Contains("Text") || formats.Contains("System.String")) return false;
                 var files = data.GetData(DataFormats.FileDrop) as string[];
                 if (files == null || files.Length != 1 || !FileRules.IsImage(files[0])) return false;
@@ -467,20 +469,58 @@ namespace ScreenLine
         {
             public string Hash;
             public CaptureSource Source;
-            public DateTime Time;
-            public bool Paired;
+            public DateTime Observed, Recorded;
         }
 
+        const int Limit = 256;
         readonly List<Receipt> recent = new List<Receipt>();
+        readonly object gate = new object();
+        internal int Count { get { lock (gate) return recent.Count; } }
 
-        public bool Accept(string hash, CaptureSource source, DateTime time)
+        // Check and Record are used on the dispatcher, with no await between them.
+        // Record only after a successful gallery commit: failed writes must not
+        // suppress the next valid arrival from the other capture source.
+        public bool IsDuplicate(string hash, CaptureSource source, DateTime observed)
         {
-            recent.RemoveAll(r => time - r.Time > TimeSpan.FromSeconds(5));
-            // 只合并文件夹与剪贴板对同一次截图的通知；连续截取相同内容仍可保留。
-            var pair = recent.FirstOrDefault(r => !r.Paired && r.Hash == hash && r.Source != source);
-            if (pair != null) { pair.Paired = true; return false; }
-            recent.Add(new Receipt { Hash = hash, Source = source, Time = time });
-            return true;
+            lock (gate)
+            {
+                Prune();
+                if (string.IsNullOrEmpty(hash)) return false;
+                var pair = recent.FirstOrDefault(r => r.Hash == hash && r.Source != source
+                    && Math.Abs((observed - r.Observed).TotalSeconds) <= 5);
+                if (pair == null) return false;
+                recent.Remove(pair); // One notification per source, never global content deduplication.
+                return true;
+            }
+        }
+
+        public void Record(string hash, CaptureSource source, DateTime observed)
+        {
+            if (string.IsNullOrEmpty(hash)) return;
+            lock (gate)
+            {
+                Prune();
+                if (recent.Count >= Limit) recent.RemoveAt(0);
+                recent.Add(new Receipt { Hash = hash, Source = source, Observed = observed, Recorded = DateTime.UtcNow });
+            }
+        }
+
+        void Prune()
+        {
+            // Retention is longer than the pairing window to allow slow decodes
+            // to finish out of order, without widening the semantic match window.
+            DateTime cutoff = DateTime.UtcNow.AddSeconds(-30);
+            recent.RemoveAll(r => r.Recorded < cutoff);
+        }
+
+        public bool Accept(string hash, CaptureSource source, DateTime observed)
+        {
+            lock (gate)
+            {
+                if (IsDuplicate(hash, source, observed)) return false;
+                Record(hash, source, observed);
+                return true;
+            }
         }
     }
 

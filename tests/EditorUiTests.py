@@ -64,6 +64,18 @@ try:
         page.evaluate('options=>startEditor(options)', {'name': '项目文件.png', 'source': source})
         page.wait_for_timeout(250)
 
+        page.evaluate("submit('save')")
+        page.wait_for_function("messages.some(message=>message.action==='save')")
+        unchanged = page.evaluate("messages.findLast(message=>message.action==='save')")
+        check(unchanged.get('unchanged') is True and 'data' not in unchanged, '打开图片不编辑时发送免重编码保存请求')
+        page.evaluate("completeAction({success:true,saved:true,message:'没有需要保存的修改'}); messages.length=0")
+        page.evaluate("submit('copy')")
+        page.wait_for_function("messages.some(message=>message.action==='copy')")
+        unchanged_copy = page.evaluate("messages.findLast(message=>message.action==='copy')")
+        copied = Image.open(io.BytesIO(base64.b64decode(unchanged_copy['data'].split(',')[1]))).convert('RGB')
+        check(copied.size == image.size and copied.tobytes() == image.tobytes(), '原图导出逐像素一致，不通过缩略图回放')
+        page.evaluate("completeAction({success:true,saved:false,message:'已复制图片'}); messages.length=0")
+
         def annotations():
             return page.evaluate('Object.values(editor.getCurrentImgData().designState.annotations).map(item=>item.name)')
 

@@ -112,6 +112,26 @@ namespace ScreenLine.Tests
                 Check(ledger.Accept("a", CaptureSource.Folder, now));
                 Check(ledger.Accept("a", CaptureSource.Clipboard, now.AddSeconds(6)));
             });
+            Run("跨来源去重以观察时间配对，不因解码先后误吞或重复收集", delegate
+            {
+                var ledger = new CaptureReceipts();
+                DateTime now = DateTime.UtcNow;
+                Check(ledger.Accept("out-of-order", CaptureSource.Folder, now.AddSeconds(4)));
+                Check(!ledger.Accept("out-of-order", CaptureSource.Clipboard, now));
+                Check(ledger.Accept("outside-window", CaptureSource.Folder, now.AddSeconds(6)));
+                Check(ledger.Accept("outside-window", CaptureSource.Clipboard, now));
+                Check(!ledger.IsDuplicate("not-committed", CaptureSource.Clipboard, now));
+                Check(!ledger.IsDuplicate("not-committed", CaptureSource.Folder, now));
+            });
+            Run("截图去重记录不会无限增长", delegate
+            {
+                var ledger = new CaptureReceipts();
+                DateTime now = DateTime.UtcNow;
+                for (int i = 0; i < 512; i++) ledger.Record(i.ToString(), CaptureSource.Folder, now);
+                Check(ledger.Count == 256);
+                Check(!ledger.IsDuplicate("0", CaptureSource.Clipboard, now));
+                Check(ledger.IsDuplicate("511", CaptureSource.Clipboard, now));
+            });
             Run("损坏图片会被拒绝", delegate
             {
                 bool rejected = false;
