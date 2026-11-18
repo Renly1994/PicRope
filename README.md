@@ -10,6 +10,9 @@
   <a href="https://github.com/Renly1994/PicRope/releases/latest"><img src="https://img.shields.io/github/v/release/Renly1994/PicRope?style=flat-square&amp;label=release&amp;color=2563eb" alt="最新版本"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078d4?style=flat-square" alt="Windows 10 和 11">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-475569?style=flat-square" alt="MIT 许可"></a>
+  <a href="https://appwk.cn/apps/picrope">
+    <img src="https://appwk.cn/badges/featured-dark.svg" alt="Featured on AppWK" />
+  </a>
 </p>
 
 <p align="center">
